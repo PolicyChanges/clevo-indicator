@@ -47,6 +47,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "nvml.h"
+
 #include <libappindicator/app-indicator.h>
 
 #define NAME "clevo-indicator"
@@ -58,6 +60,10 @@
 #define OBF 0
 #define EC_SC_READ_CMD 0x80
 
+#define FAN_1 0x01
+#define FAN_2 0x02
+
+
 /* EC registers can be read by EC_SC_READ_CMD or /sys/kernel/debug/ec/ec0/io:
  *
  * 1. modprobe ec_sys
@@ -68,8 +74,10 @@
 #define EC_REG_CPU_TEMP 0x07
 #define EC_REG_GPU_TEMP 0xCD
 #define EC_REG_FAN_DUTY 0xCE
-#define EC_REG_FAN_RPMS_HI 0xD0
-#define EC_REG_FAN_RPMS_LO 0xD1
+#define EC_REG_FAN_1_RPMS_HI 0xD0
+#define EC_REG_FAN_1_RPMS_LO 0xD1
+#define EC_REG_FAN_2_RPMS_HI 0xD2
+#define EC_REG_FAN_2_RPMS_LO 0xD3
 
 #define MAX_FAN_RPM 4400.0
 
@@ -94,7 +102,7 @@ static int ec_auto_duty_adjust(void);
 static int ec_query_cpu_temp(void);
 static int ec_query_gpu_temp(void);
 static int ec_query_fan_duty(void);
-static int ec_query_fan_rpms(void);
+static int ec_query_fan_rpms(int fan);
 static int ec_write_fan_duty(int duty_percentage);
 static int ec_io_wait(const uint32_t port, const uint32_t flag,
         const char value);
@@ -106,6 +114,8 @@ static int calculate_fan_rpms(int raw_rpm_high, int raw_rpm_low);
 static int check_proc_instances(const char* proc_name);
 static void get_time_string(char* buffer, size_t max, const char* format);
 static void signal_term(__sighandler_t handler);
+
+static void init_nvml(void);
 
 static AppIndicator* indicator = NULL;
 
@@ -119,6 +129,12 @@ struct {
 }static menuitems[] = {
         { "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
         { "", NULL, 0L, NA, NULL },
+        { "Set FAN to  0%", G_CALLBACK(ui_command_set_fan), 0, MANUAL, NULL },
+        { "Set FAN to  10%", G_CALLBACK(ui_command_set_fan), 10, MANUAL, NULL },
+        { "Set FAN to  20%", G_CALLBACK(ui_command_set_fan), 20, MANUAL, NULL },
+        { "Set FAN to  30%", G_CALLBACK(ui_command_set_fan), 30, MANUAL, NULL },
+        { "Set FAN to  40%", G_CALLBACK(ui_command_set_fan), 40, MANUAL, NULL },
+        { "Set FAN to  50%", G_CALLBACK(ui_command_set_fan), 50, MANUAL, NULL },
         { "Set FAN to  60%", G_CALLBACK(ui_command_set_fan), 60, MANUAL, NULL },
         { "Set FAN to  70%", G_CALLBACK(ui_command_set_fan), 70, MANUAL, NULL },
         { "Set FAN to  80%", G_CALLBACK(ui_command_set_fan), 80, MANUAL, NULL },
@@ -135,7 +151,8 @@ struct {
     volatile int cpu_temp;
     volatile int gpu_temp;
     volatile int fan_duty;
-    volatile int fan_rpms;
+    volatile int fan_1_rpms;
+    volatile int fan_2_rpms;
     volatile int auto_duty;
     volatile int auto_duty_val;
     volatile int manual_next_fan_duty;
@@ -226,7 +243,7 @@ DO NOT MANIPULATE OR QUERY EC I/O PORTS WHILE THIS PROGRAM IS RUNNING.\n\
             return main_dump_fan();
         } else {
             int val = atoi(argv[1]);
-            if (val < 40 || val > 100)
+            if (val < 0 || val > 100)
                     {
                 printf("invalid fan duty %d!\n", val);
                 return EXIT_FAILURE;
@@ -245,7 +262,8 @@ static void main_init_share(void) {
     share_info->cpu_temp = 0;
     share_info->gpu_temp = 0;
     share_info->fan_duty = 0;
-    share_info->fan_rpms = 0;
+    share_info->fan_1_rpms = 0;
+    share_info->fan_2_rpms = 0;
     share_info->auto_duty = 1;
     share_info->auto_duty_val = 0;
     share_info->manual_next_fan_duty = 0;
@@ -255,6 +273,7 @@ static void main_init_share(void) {
 static int main_ec_worker(void) {
     setuid(0);
     system("modprobe ec_sys");
+    init_nvml();
     while (share_info->exit == 0) {
         // check parent
         if (parent_pid != 0 && kill(parent_pid, 0) == -1) {
@@ -284,8 +303,10 @@ static int main_ec_worker(void) {
             share_info->cpu_temp = buf[EC_REG_CPU_TEMP];
             share_info->gpu_temp = buf[EC_REG_GPU_TEMP];
             share_info->fan_duty = calculate_fan_duty(buf[EC_REG_FAN_DUTY]);
-            share_info->fan_rpms = calculate_fan_rpms(buf[EC_REG_FAN_RPMS_HI],
-                    buf[EC_REG_FAN_RPMS_LO]);
+            share_info->fan_1_rpms = calculate_fan_rpms(buf[EC_REG_FAN_1_RPMS_HI],
+                    buf[EC_REG_FAN_1_RPMS_LO]);
+            share_info->fan_2_rpms = calculate_fan_rpms(buf[EC_REG_FAN_2_RPMS_HI],
+                    buf[EC_REG_FAN_2_RPMS_LO]);
             /*
              printf("temp=%d, duty=%d, rpms=%d\n", share_info->cpu_temp,
              share_info->fan_duty, share_info->fan_rpms);
@@ -366,7 +387,8 @@ static void main_on_sigterm(int signum) {
 static int main_dump_fan(void) {
     printf("Dump fan information\n");
     printf("  FAN Duty: %d%%\n", ec_query_fan_duty());
-    printf("  FAN RPMs: %d RPM\n", ec_query_fan_rpms());
+    printf("  CPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(1));
+    printf("  GPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(2));
     printf("  CPU Temp: %d°C\n", ec_query_cpu_temp());
     printf("  GPU Temp: %d°C\n", ec_query_gpu_temp());
     return EXIT_SUCCESS;
@@ -385,7 +407,7 @@ static gboolean ui_update(gpointer user_data) {
     sprintf(label, "%d℃ %d℃", share_info->cpu_temp, share_info->gpu_temp);
     app_indicator_set_label(indicator, label, "XXXXXX");
     char icon_name[256];
-    double load = ((double) share_info->fan_rpms) / MAX_FAN_RPM * 100.0;
+    double load = ((double) share_info->fan_1_rpms) / MAX_FAN_RPM * 100.0;
     double load_r = round(load / 5.0) * 5.0;
     sprintf(icon_name, "brasero-disc-%02d", (int) load_r);
     app_indicator_set_icon(indicator, icon_name);
@@ -443,39 +465,28 @@ static void ec_on_sigterm(int signum) {
 
 static int ec_auto_duty_adjust(void) {
     int temp = MAX(share_info->cpu_temp, share_info->gpu_temp);
+    printf("TEMP: %d\n", temp);
     int duty = share_info->fan_duty;
+    printf("DUTY: %d\n", duty);
     //
     if (temp >= 80 && duty < 100)
         return 100;
-    if (temp >= 70 && duty < 90)
-        return 90;
-    if (temp >= 60 && duty < 80)
-        return 80;
-    if (temp >= 50 && duty < 70)
-        return 70;
-    if (temp >= 40 && duty < 60)
+    if (temp >= 70 && duty < 60)
         return 60;
-    if (temp >= 30 && duty < 50)
-        return 50;
-    if (temp >= 20 && duty < 40)
+    if (temp >= 60 && duty < 40)
         return 40;
-    if (temp >= 10 && duty < 30)
-        return 30;
+    if (temp >= 50 && duty < 20)
+        return 20;
+
     //
-    if (temp <= 15 && duty > 30)
-        return 30;
-    if (temp <= 25 && duty > 40)
+    if (temp <= 45 && duty > 0)
+        return 0;
+    if (temp <= 55 && duty > 20)
+        return 20;
+    if (temp <= 65 && duty > 40)
         return 40;
-    if (temp <= 35 && duty > 50)
-        return 50;
-    if (temp <= 45 && duty > 60)
+    if (temp <= 75 && duty > 60)
         return 60;
-    if (temp <= 55 && duty > 70)
-        return 70;
-    if (temp <= 65 && duty > 80)
-        return 80;
-    if (temp <= 75 && duty > 90)
-        return 90;
     //
     return 0;
 }
@@ -485,6 +496,7 @@ static int ec_query_cpu_temp(void) {
 }
 
 static int ec_query_gpu_temp(void) {
+    
     return ec_io_read(EC_REG_GPU_TEMP);
 }
 
@@ -493,20 +505,28 @@ static int ec_query_fan_duty(void) {
     return calculate_fan_duty(raw_duty);
 }
 
-static int ec_query_fan_rpms(void) {
-    int raw_rpm_hi = ec_io_read(EC_REG_FAN_RPMS_HI);
-    int raw_rpm_lo = ec_io_read(EC_REG_FAN_RPMS_LO);
-    return calculate_fan_rpms(raw_rpm_hi, raw_rpm_lo);
+static int ec_query_fan_rpms(int fan) {
+    if(fan == 1){
+        int raw_rpm_hi = ec_io_read(EC_REG_FAN_1_RPMS_HI);
+        int raw_rpm_lo = ec_io_read(EC_REG_FAN_1_RPMS_LO);
+        return calculate_fan_rpms(raw_rpm_hi, raw_rpm_lo);
+    }
+    else{
+        int raw_rpm_hi = ec_io_read(EC_REG_FAN_2_RPMS_HI);
+        int raw_rpm_lo = ec_io_read(EC_REG_FAN_2_RPMS_LO);
+        return calculate_fan_rpms(raw_rpm_hi, raw_rpm_lo);
+    }
 }
 
 static int ec_write_fan_duty(int duty_percentage) {
-    if (duty_percentage < 60 || duty_percentage > 100) {
+    if (duty_percentage < 0 || duty_percentage > 100) {
         printf("Wrong fan duty to write: %d\n", duty_percentage);
         return EXIT_FAILURE;
     }
     double v_d = ((double) duty_percentage) / 100.0 * 255.0;
     int v_i = (int) v_d;
-    return ec_io_do(0x99, 0x01, v_i);
+    ec_io_do(0x99, FAN_2, v_i);
+    return ec_io_do(0x99, FAN_1, v_i);
 }
 
 static int ec_io_wait(const uint32_t port, const uint32_t flag,
@@ -615,3 +635,48 @@ static void signal_term(__sighandler_t handler) {
     signal(SIGUSR1, handler);
     signal(SIGUSR2, handler);
 }
+
+
+static void init_nvml(void){
+    nvmlReturn_t result;
+    unsigned int device_count;
+
+    // First initialize NVML library
+    result = nvmlInit();
+    if (NVML_SUCCESS != result)
+    { 
+        printf("Failed to initialize NVML: %s\n", nvmlErrorString(result));
+
+        printf("Press ENTER to continue...\n");
+        getchar();
+        return;
+    }
+
+    result = nvmlDeviceGetCount(&device_count);
+    if (NVML_SUCCESS != result)
+    { 
+        printf("Failed to query device count: %s\n", nvmlErrorString(result));
+        return;
+    }
+    printf("Found %u device%s\n\n", device_count, device_count != 1 ? "s" : "");
+
+    printf("Listing devices:\n");
+    nvmlDevice_t device;
+    nvmlTemperatureSensors_t sensor = NVML_TEMPERATURE_GPU;
+    char name[NVML_DEVICE_NAME_BUFFER_SIZE];
+    unsigned int temp;
+    nvmlPciInfo_t pci;
+    // nvmlComputeMode_t compute_mode;
+
+    // Query for device handle to perform operations on a device
+    // You can also query device handle by other features like:
+    // nvmlDeviceGetHandleBySerial
+    // nvmlDeviceGetHandleByPciBusId
+    
+    result = nvmlDeviceGetHandleByIndex(0, &device);
+    result = nvmlDeviceGetName(device, name, NVML_DEVICE_NAME_BUFFER_SIZE);
+    result = nvmlDeviceGetPciInfo(device, &pci);
+    nvmlDeviceGetTemperature(device, sensor, &temp);
+    printf("%u. %s [%s]\n", 0, name, pci.busId);
+    printf("TEMP NV: %d\n", temp);
+    }
