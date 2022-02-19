@@ -116,6 +116,9 @@ static void get_time_string(char* buffer, size_t max, const char* format);
 static void signal_term(__sighandler_t handler);
 
 static void init_nvml(void);
+nvmlDevice_t device;
+nvmlTemperatureSensors_t sensor = NVML_TEMPERATURE_GPU;
+unsigned int temp;
 
 static AppIndicator* indicator = NULL;
 
@@ -390,7 +393,7 @@ static int main_dump_fan(void) {
     printf("  CPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(1));
     printf("  GPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(2));
     printf("  CPU Temp: %d°C\n", ec_query_cpu_temp());
-    printf("  GPU Temp: %d°C\n", ec_query_gpu_temp());
+    printf("  GPU Temp: %d°C\n", nvml_query_gpu_temp());
     return EXIT_SUCCESS;
 }
 
@@ -466,6 +469,7 @@ static void ec_on_sigterm(int signum) {
 static int ec_auto_duty_adjust(void) {
     int temp = MAX(share_info->cpu_temp, share_info->gpu_temp);
     printf("TEMP: %d\n", temp);
+    printf("GPU TEMP: %d\n", nvml_query_gpu_temp());
     int duty = share_info->fan_duty;
     printf("DUTY: %d\n", duty);
     //
@@ -495,8 +499,13 @@ static int ec_query_cpu_temp(void) {
     return ec_io_read(EC_REG_CPU_TEMP);
 }
 
+int nvml_query_gpu_temp(void) {
+    nvmlDeviceGetTemperature(device, sensor, &temp); 
+    return temp;
+}
+
+
 static int ec_query_gpu_temp(void) {
-    
     return ec_io_read(EC_REG_GPU_TEMP);
 }
 
@@ -661,10 +670,7 @@ static void init_nvml(void){
     printf("Found %u device%s\n\n", device_count, device_count != 1 ? "s" : "");
 
     printf("Listing devices:\n");
-    nvmlDevice_t device;
-    nvmlTemperatureSensors_t sensor = NVML_TEMPERATURE_GPU;
     char name[NVML_DEVICE_NAME_BUFFER_SIZE];
-    unsigned int temp;
     nvmlPciInfo_t pci;
     // nvmlComputeMode_t compute_mode;
 
@@ -676,7 +682,8 @@ static void init_nvml(void){
     result = nvmlDeviceGetHandleByIndex(0, &device);
     result = nvmlDeviceGetName(device, name, NVML_DEVICE_NAME_BUFFER_SIZE);
     result = nvmlDeviceGetPciInfo(device, &pci);
-    nvmlDeviceGetTemperature(device, sensor, &temp);
     printf("%u. %s [%s]\n", 0, name, pci.busId);
+
+    nvmlDeviceGetTemperature(device, sensor, &temp);
     printf("TEMP NV: %d\n", temp);
     }
