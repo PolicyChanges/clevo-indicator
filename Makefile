@@ -1,8 +1,8 @@
 vpath %.c ../src
 
 CC = gcc
-CFLAGS = -c -Wall -std=gnu99
-LDFLAGS =
+CFLAGS = -c -g -Wall -std=gnu99
+LDFLAGS = -g
 
 DSTDIR := /usr/local
 OBJDIR := obj
@@ -36,6 +36,14 @@ $(TARGET): $(OBJ) Makefile
 	@$(CC) $(OBJ) -o $(TARGET) $(LDFLAGS) -lm
 	@sudo chown root $(TARGET)
 	@sudo chmod u+s $(TARGET)
+
+debug: $(TARGET)
+	@mkdir -p bin
+	@echo linking $(TARGET) from $(OBJ)
+	@$(CC) -ggdb $(OBJ) -o $(TARGET) $(LDFLAGS) -lm
+	@sudo chown root $(TARGET)
+	@sudo chmod u+s $(TARGET)
+	@gdb $(TARGET)
 
 clean:
 	rm $(OBJ) $(TARGET)
