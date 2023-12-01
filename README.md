@@ -12,6 +12,8 @@ It shows the CPU temperature on the left and the GPU temperature on the right, a
 For command-line, use *-h* to display help, or a number representing percentage of fan duty to control the fan (from 40% to 100%).
 
 
+Currrently not working due to ```libayatana-appindicator3-0.1```
+
 Build and Install
 -----------------
 
