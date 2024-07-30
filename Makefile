@@ -16,8 +16,8 @@ TARGET = bin/clevo-indicator
 
 NVML_LIB := /lib/
 NVML_LIB_L := $(addprefix -L , $(NVML_LIB))
-CFLAGS += `pkg-config --cflags appindicator3-0.1`
-LDFLAGS += `pkg-config --libs appindicator3-0.1`
+CFLAGS += `pkg-config --cflags ayatana-appindicator3-0.1`
+LDFLAGS += `pkg-config --libs ayatana-appindicator3-0.1`
 LDFLAGS += -lnvidia-ml $(NVML_LIB_L)
 all: $(TARGET)
 
@@ -43,7 +43,7 @@ debug: $(TARGET)
 	@$(CC) -ggdb $(OBJ) -o $(TARGET) $(LDFLAGS) -lm
 	@sudo chown root $(TARGET)
 	@sudo chmod u+s $(TARGET)
-	@gdb $(TARGET)
+	@sudo gdb $(TARGET)
 
 clean:
 	rm $(OBJ) $(TARGET)

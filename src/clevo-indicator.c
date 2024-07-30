@@ -47,9 +47,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "nvml.h"
+#include <libayatana-appindicator/app-indicator.h>
 
-#include <libappindicator/app-indicator.h>
+#include  "nvml.h"
 
 #define NAME "clevo-indicator"
 
@@ -117,9 +117,18 @@ static void get_time_string(char* buffer, size_t max, const char* format);
 static void signal_term(__sighandler_t handler);
 
 static void init_nvml(void);
-nvmlDevice_t device;
-nvmlTemperatureSensors_t sensor = NVML_TEMPERATURE_GPU;
-unsigned int gpu_temp;
+
+typedef struct nvidia_device_t {
+	nvmlDevice_t device;
+	nvmlTemperatureSensors_t sensor;// NVML_TEMPERATURE_GPU
+	char name[NVML_DEVICE_NAME_BUFFER_SIZE];
+	unsigned int gpu_temp;
+
+}nvidia_device;
+
+volatile nvidia_device *nvidia_devices;
+	
+unsigned int nvidia_device_count;
 
 static AppIndicator* indicator = NULL;
 
@@ -130,7 +139,9 @@ struct {
     MenuItemType type;
     GtkWidget* widget;
 
-}static menuitems[] = {
+}
+
+static menuitems[] = {
         { "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
         { "", NULL, 0L, NA, NULL },
         { "Set FAN to  0%", G_CALLBACK(ui_command_set_fan), 0, MANUAL, NULL },
@@ -154,6 +165,7 @@ struct {
     volatile int exit;
     volatile int cpu_temp;
     volatile int gpu_temp;
+    volatile int gpu_temp2;
     volatile int cpu_fan_duty;
     volatile int gpu_fan_duty;
     volatile int fan_1_rpms;
@@ -204,9 +216,9 @@ int main(int argc, char* argv[]) {
                 signal_term(&ec_on_sigterm);
                 return main_ec_worker();
             } else if (worker_pid > 0) {
-                main_ui_worker(argc, argv);
-                share_info->exit = 1;
-                waitpid(worker_pid, NULL, 0);
+               main_ui_worker(argc, argv);
+               share_info->exit = 1;
+               waitpid(worker_pid, NULL, 0);
             } else {
                 printf("unable to create worker: %s\n", strerror(errno));
                 return EXIT_FAILURE;
@@ -257,6 +269,7 @@ DO NOT MANIPULATE OR QUERY EC I/O PORTS WHILE THIS PROGRAM IS RUNNING.\n\
             return main_test_fan(val);
         }
     }
+    
     return EXIT_SUCCESS;
 }
 
@@ -267,10 +280,11 @@ static void main_init_share(void) {
     share_info->exit = 0;
     share_info->cpu_temp = 0;
     share_info->gpu_temp = 0;
-    share_info->cpu_fan_duty = 0;
+    share_info->gpu_temp2 = 0;
     share_info->gpu_fan_duty = 0;
-    share_info->fan_1_rpms = 0;
     share_info->fan_2_rpms = 0;
+    share_info->cpu_fan_duty = 0;
+    share_info->fan_1_rpms = 0;
     share_info->auto_duty = 1;
     share_info->auto_duty_val = -1;
     share_info->manual_next_fan_duty = 0;
@@ -307,7 +321,8 @@ static int main_ec_worker(void) {
             break;
         case 0x100:
             share_info->cpu_temp = buf[EC_REG_CPU_TEMP];
-            share_info->gpu_temp = gpu_temp;
+            share_info->gpu_temp = nvml_query_gpu_temp(0);
+            share_info->gpu_temp2 = nvml_query_gpu_temp(1);
             share_info->cpu_fan_duty = calculate_fan_duty(buf[EC_REG_CPU_FAN_DUTY]);
             share_info->gpu_fan_duty = calculate_fan_duty(buf[EC_REG_GPU_FAN_DUTY]);
             share_info->fan_1_rpms = calculate_fan_rpms(buf[EC_REG_FAN_1_RPMS_HI],
@@ -326,11 +341,12 @@ static int main_ec_worker(void) {
         // auto EC
         if (share_info->auto_duty == 1) {
             int next_duty = ec_auto_duty_adjust();
+            next_duty = ceil((float)next_duty /10.0) * 10;            
             if (next_duty != -1 && next_duty != share_info->auto_duty_val) {
                 char s_time[256];
                 get_time_string(s_time, 256, "%d/%m %H:%M:%S");
-                printf("%s CPU=%d°C, GPU=%d°C, auto fan duty to %d%%\n", s_time,
-                        share_info->cpu_temp, share_info->gpu_temp, next_duty);
+                printf("%s CPU=%d°C, GPU1=%d°C, GPU2=%d°C auto fan duty to %d%%\n", s_time,
+                        share_info->cpu_temp, share_info->gpu_temp, share_info->gpu_temp2, next_duty);
                 ec_write_fan_duty(next_duty);
                 share_info->auto_duty_val = next_duty;
             }
@@ -338,6 +354,7 @@ static int main_ec_worker(void) {
         //
         usleep(200 * 1000);
     }
+
     printf("worker quit\n");
     return EXIT_SUCCESS;
 }
@@ -373,7 +390,7 @@ static void main_ui_worker(int argc, char** argv) {
     app_indicator_set_ordering_index(indicator, -2);
     app_indicator_set_title(indicator, "Clevo");
     app_indicator_set_menu(indicator, GTK_MENU(indicator_menu));
-    g_timeout_add(500, &ui_update, NULL);
+    g_timeout_add(1000, &ui_update, NULL);
     ui_toggle_menuitems(share_info->cpu_fan_duty);
     gtk_main();
     printf("main on UI quit\n");
@@ -398,7 +415,8 @@ static int main_dump_fan(void) {
     printf("  CPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(1));
     printf("  GPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(2));
     printf("  CPU Temp: %d°C\n", ec_query_cpu_temp());
-    printf("  GPU Temp: %d°C\n", nvml_query_gpu_temp());
+    for(int i = 0; i < nvidia_device_count; i++) 
+		printf("  GPU %d Temp: %d°C\n", i+1, nvml_query_gpu_temp(i));
     return EXIT_SUCCESS;
 }
 
@@ -490,6 +508,7 @@ static int ec_auto_duty_adjust(void) {
     // printf("power: %lf\n", power);
     double val = 1/(1 + power) * 100;
     // printf("ret: %lf\n", val);
+    //if(val < 50) val=50;
     return val;
     
     // Deprecated.. Trying new curve function
@@ -519,9 +538,10 @@ static int ec_query_cpu_temp(void) {
     return ec_io_read(EC_REG_CPU_TEMP);
 }
 
-int nvml_query_gpu_temp(void) {
-    nvmlDeviceGetTemperature(device, sensor, &gpu_temp);
-    return gpu_temp;
+int nvml_query_gpu_temp(device_index) {
+    nvmlDeviceGetTemperature(nvidia_devices[device_index].device, 
+		nvidia_devices[device_index].sensor, &nvidia_devices[device_index].gpu_temp);
+    return nvidia_devices[device_index].gpu_temp;
 }
 
 
@@ -668,8 +688,7 @@ static void signal_term(__sighandler_t handler) {
 
 static void init_nvml(void){
     nvmlReturn_t result;
-    unsigned int device_count;
-
+    
     // First initialize NVML library
     result = nvmlInit();
     if (NVML_SUCCESS != result)
@@ -681,16 +700,19 @@ static void init_nvml(void){
         return;
     }
 
-    result = nvmlDeviceGetCount(&device_count);
+    result = nvmlDeviceGetCount(&nvidia_device_count);
+    
+	nvidia_devices = (nvidia_device*)malloc(sizeof(nvidia_device) * nvidia_device_count);
+
     if (NVML_SUCCESS != result)
     { 
         printf("Failed to query device count: %s\n", nvmlErrorString(result));
         return;
     }
-    printf("Found %u device%s\n\n", device_count, device_count != 1 ? "s" : "");
+    printf("Found %u device%s\n\n", nvidia_device_count, nvidia_device_count != 1 ? "s" : "");
 
     printf("Listing devices:\n");
-    char name[NVML_DEVICE_NAME_BUFFER_SIZE];
+    
     nvmlPciInfo_t pci;
     // nvmlComputeMode_t compute_mode;
 
@@ -698,12 +720,13 @@ static void init_nvml(void){
     // You can also query device handle by other features like:
     // nvmlDeviceGetHandleBySerial
     // nvmlDeviceGetHandleByPciBusId
-    
-    result = nvmlDeviceGetHandleByIndex(0, &device);
-    result = nvmlDeviceGetName(device, name, NVML_DEVICE_NAME_BUFFER_SIZE);
-    result = nvmlDeviceGetPciInfo(device, &pci);
-    printf("%u. %s [%s]\n", 0, name, pci.busId);
-
-    nvmlDeviceGetTemperature(device, sensor, &gpu_temp);
-    printf("TEMP NV: %d\n", gpu_temp);
-    }
+    for(int i = 0; i < nvidia_device_count; i++){
+		nvidia_devices[i].sensor = NVML_TEMPERATURE_GPU;
+		result = nvmlDeviceGetHandleByIndex(0, &nvidia_devices[i].device);
+		result = nvmlDeviceGetName(nvidia_devices[i].device, nvidia_devices[i].name, NVML_DEVICE_NAME_BUFFER_SIZE);
+		result = nvmlDeviceGetPciInfo(nvidia_devices[i].device, &pci);
+		printf("%u. %s [%s]\n", 0, nvidia_devices[i].name, pci.busId);
+		nvmlDeviceGetTemperature(nvidia_devices[i].device, nvidia_devices[i].sensor, &nvidia_devices[i].gpu_temp);
+		printf("TEMP NV: %d\n", nvidia_devices[i].gpu_temp);
+	}
+}
