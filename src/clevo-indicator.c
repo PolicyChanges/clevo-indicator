@@ -82,6 +82,38 @@
 
 #define MAX_FAN_RPM 4400.0
 
+static char* help_text = "\n\
+Usage: clevo-indicator [fan-duty-percentage]\n\
+\n\
+Dump/Control fan duty on Clevo laptops. Display indicator by default.\n\
+\n\
+Arguments:\n\
+  [fan-duty-percentage]\t\tTarget fan duty in percentage, from 40 to 100\n\
+  -?\t\t\t\tDisplay this help and exit\n\
+\n\
+Without arguments this program should attempt to display an indicator in\n\
+the Ubuntu tray area for fan information display and control. The indicator\n\
+requires this program to have setuid=root flag but run from the desktop user\n\
+, because a root user is not allowed to display a desktop indicator while a\n\
+non-root user is not allowed to control Clevo EC (Embedded Controller that's\n\
+responsible of the fan). Fix permissions of this executable if it fails to\n\
+run:\n\
+    sudo chown root clevo-indicator\n\
+    sudo chmod u+s  clevo-indicator\n\
+\n\
+Note any fan duty change should take 1-2 seconds to come into effect - you\n\
+can verify by the fan speed displayed on indicator icon and also louder fan\n\
+noise.\n\
+\n\
+In the indicator mode, this program would always attempt to load kernel\n\
+module 'ec_sys', in order to query EC information from\n\
+'/sys/kernel/debug/ec/ec0/io' instead of polling EC ports for readings,\n\
+which may be more risky if interrupted or concurrently operated during the\n\
+process.\n\
+\n\
+DO NOT MANIPULATE OR QUERY EC I/O PORTS WHILE THIS PROGRAM IS RUNNING.\n\
+\n";
+
 typedef enum {
     NA = 0, AUTO = 1, MANUAL = 2
 } MenuItemType;
@@ -127,8 +159,9 @@ typedef struct nvidia_device_t {
 }nvidia_device;
 
 volatile nvidia_device *nvidia_devices;
-	
 unsigned int nvidia_device_count;
+
+FILE *fp = NULL;
 
 static AppIndicator* indicator = NULL;
 
@@ -166,6 +199,7 @@ struct {
     volatile int cpu_temp;
     volatile int gpu_temp;
     volatile int gpu_temp2;
+    nvidia_device *nvidia_devices;
     volatile int cpu_fan_duty;
     volatile int gpu_fan_duty;
     volatile int fan_1_rpms;
@@ -226,38 +260,7 @@ int main(int argc, char* argv[]) {
         }
     } else {
         if (argv[1][0] == '-') {
-            printf(
-                    "\n\
-Usage: clevo-indicator [fan-duty-percentage]\n\
-\n\
-Dump/Control fan duty on Clevo laptops. Display indicator by default.\n\
-\n\
-Arguments:\n\
-  [fan-duty-percentage]\t\tTarget fan duty in percentage, from 40 to 100\n\
-  -?\t\t\t\tDisplay this help and exit\n\
-\n\
-Without arguments this program should attempt to display an indicator in\n\
-the Ubuntu tray area for fan information display and control. The indicator\n\
-requires this program to have setuid=root flag but run from the desktop user\n\
-, because a root user is not allowed to display a desktop indicator while a\n\
-non-root user is not allowed to control Clevo EC (Embedded Controller that's\n\
-responsible of the fan). Fix permissions of this executable if it fails to\n\
-run:\n\
-    sudo chown root clevo-indicator\n\
-    sudo chmod u+s  clevo-indicator\n\
-\n\
-Note any fan duty change should take 1-2 seconds to come into effect - you\n\
-can verify by the fan speed displayed on indicator icon and also louder fan\n\
-noise.\n\
-\n\
-In the indicator mode, this program would always attempt to load kernel\n\
-module 'ec_sys', in order to query EC information from\n\
-'/sys/kernel/debug/ec/ec0/io' instead of polling EC ports for readings,\n\
-which may be more risky if interrupted or concurrently operated during the\n\
-process.\n\
-\n\
-DO NOT MANIPULATE OR QUERY EC I/O PORTS WHILE THIS PROGRAM IS RUNNING.\n\
-\n");
+            printf(help_text);
             return main_dump_fan();
         } else {
             int val = atoi(argv[1]);
@@ -281,6 +284,7 @@ static void main_init_share(void) {
     share_info->cpu_temp = 0;
     share_info->gpu_temp = 0;
     share_info->gpu_temp2 = 0;
+    share_info->nvidia_devices = nvidia_devices;
     share_info->gpu_fan_duty = 0;
     share_info->fan_2_rpms = 0;
     share_info->cpu_fan_duty = 0;
@@ -291,9 +295,29 @@ static void main_init_share(void) {
     share_info->manual_prev_fan_duty = 0;
 }
 
+static unsigned char get_gpu_temperature(int *temp1, int *temp2) {
+	char temperature[64];
+	int i=0;
+	
+	fgets(temperature, sizeof(temperature), fp);
+	*temp1 = atoi(temperature);
+	fgets(temperature, sizeof(temperature), fp);
+	*temp2 = atoi(temperature);
+   
+    return TRUE;
+}
+
 static int main_ec_worker(void) {
     setuid(0);
     system("modprobe ec_sys");
+    
+	fp = popen("/usr/bin/nvidia-smi -l 1 --query-gpu=temperature.gpu --format=csv,noheader", "r");
+	
+	if (fp == NULL) {
+		printf("failed to open pipe\n");
+		return FALSE;
+	}
+	
     while (share_info->exit == 0) {
         // check parent
         if (parent_pid != 0 && kill(parent_pid, 0) == -1) {
@@ -321,8 +345,7 @@ static int main_ec_worker(void) {
             break;
         case 0x100:
             share_info->cpu_temp = buf[EC_REG_CPU_TEMP];
-            share_info->gpu_temp = nvml_query_gpu_temp(0);
-            share_info->gpu_temp2 = nvml_query_gpu_temp(1);
+            get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
             share_info->cpu_fan_duty = calculate_fan_duty(buf[EC_REG_CPU_FAN_DUTY]);
             share_info->gpu_fan_duty = calculate_fan_duty(buf[EC_REG_GPU_FAN_DUTY]);
             share_info->fan_1_rpms = calculate_fan_rpms(buf[EC_REG_FAN_1_RPMS_HI],
@@ -352,9 +375,9 @@ static int main_ec_worker(void) {
             }
         }
         //
-        usleep(200 * 1000);
+        usleep(1000 * 1000);
     }
-
+	pclose(fp);
     printf("worker quit\n");
     return EXIT_SUCCESS;
 }
@@ -490,11 +513,11 @@ static void ec_on_sigterm(int signum) {
 }
 
 static int ec_auto_duty_adjust(void) {
-    int temp = MAX(share_info->cpu_temp, share_info->gpu_temp);
+	get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
+	//printf("temp: %d temp2 %d\n", share_info->gpu_temp, share_info->gpu_temp2);
+    int temp = MAX(MAX(share_info->cpu_temp, share_info->gpu_temp), share_info->gpu_temp2);
     int duty = share_info->cpu_fan_duty;
-    // printf("DUTY: %d\n", duty);
-    // printf("temp: %d\n", temp);
-    //
+	//printf("temp: %d\n", temp);
     const double EULER = 2.71828182845904523536;
     double x50L = 50.0;
     double x50U = 60.0;
@@ -510,38 +533,17 @@ static int ec_auto_duty_adjust(void) {
     // printf("ret: %lf\n", val);
     //if(val < 50) val=50;
     return val;
-    
-    // Deprecated.. Trying new curve function
-    // if (temp >= 80 && duty < 100)
-    //     return 100;
-    // if (temp >= 70 && duty < 60)
-    //     return 50;
-    // if (temp >= 65 && duty < 40)
-    //     return 20;
-    // if (temp >= 50 && duty < 20)
-    //     return 10;
 
-    // //
-    // if (temp <= 45 && duty > 0)
-    //     return 0;
-    // if (temp <= 55 && duty > 20)
-    //     return 20;
-    // if (temp <= 65 && duty > 40)
-    //     return 40;
-    // if (temp <= 75 && duty > 60)
-    //     return 60;
-    // //
-    // return -1;
 }
 
 static int ec_query_cpu_temp(void) {
     return ec_io_read(EC_REG_CPU_TEMP);
 }
 
-int nvml_query_gpu_temp(device_index) {
-    nvmlDeviceGetTemperature(nvidia_devices[device_index].device, 
-		nvidia_devices[device_index].sensor, &nvidia_devices[device_index].gpu_temp);
-    return nvidia_devices[device_index].gpu_temp;
+int nvml_query_gpu_temp(nvidia_device nvidia_device) {
+    nvmlDeviceGetTemperature(nvidia_device.device, 
+		nvidia_device.sensor, &nvidia_device.gpu_temp);
+    return nvidia_device.gpu_temp;
 }
 
 
