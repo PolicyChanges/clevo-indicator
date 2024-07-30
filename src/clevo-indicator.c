@@ -158,7 +158,7 @@ typedef struct nvidia_device_t {
 
 }nvidia_device;
 
-volatile nvidia_device *nvidia_devices;
+nvidia_device *nvidia_devices;
 unsigned int nvidia_device_count;
 
 FILE *fp = NULL;
@@ -199,7 +199,6 @@ struct {
     volatile int cpu_temp;
     volatile int gpu_temp;
     volatile int gpu_temp2;
-    nvidia_device *nvidia_devices;
     volatile int cpu_fan_duty;
     volatile int gpu_fan_duty;
     volatile int fan_1_rpms;
@@ -284,7 +283,6 @@ static void main_init_share(void) {
     share_info->cpu_temp = 0;
     share_info->gpu_temp = 0;
     share_info->gpu_temp2 = 0;
-    share_info->nvidia_devices = nvidia_devices;
     share_info->gpu_fan_duty = 0;
     share_info->fan_2_rpms = 0;
     share_info->cpu_fan_duty = 0;
@@ -297,7 +295,6 @@ static void main_init_share(void) {
 
 static unsigned char get_gpu_temperature(int *temp1, int *temp2) {
 	char temperature[64];
-	int i=0;
 	
 	fgets(temperature, sizeof(temperature), fp);
 	*temp1 = atoi(temperature);
@@ -364,7 +361,7 @@ static int main_ec_worker(void) {
         // auto EC
         if (share_info->auto_duty == 1) {
             int next_duty = ec_auto_duty_adjust();
-            next_duty = ceil((float)next_duty /10.0) * 10;            
+            next_duty = !(next_duty>=95) ? ((int)(((float)next_duty /10.0)) * 10) : 100;            
             if (next_duty != -1 && next_duty != share_info->auto_duty_val) {
                 char s_time[256];
                 get_time_string(s_time, 256, "%d/%m %H:%M:%S");
@@ -375,7 +372,7 @@ static int main_ec_worker(void) {
             }
         }
         //
-        usleep(1000 * 1000);
+        usleep(2000 * 1000);
     }
 	pclose(fp);
     printf("worker quit\n");
@@ -438,8 +435,7 @@ static int main_dump_fan(void) {
     printf("  CPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(1));
     printf("  GPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(2));
     printf("  CPU Temp: %d°C\n", ec_query_cpu_temp());
-    for(int i = 0; i < nvidia_device_count; i++) 
-		printf("  GPU %d Temp: %d°C\n", i+1, nvml_query_gpu_temp(i));
+    //printf("  GPU 1 %d Temp: %d°C\n", i+1, nvml_query_gpu_temp(i));
     return EXIT_SUCCESS;
 }
 
@@ -514,10 +510,10 @@ static void ec_on_sigterm(int signum) {
 
 static int ec_auto_duty_adjust(void) {
 	get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
-	//printf("temp: %d temp2 %d\n", share_info->gpu_temp, share_info->gpu_temp2);
+
     int temp = MAX(MAX(share_info->cpu_temp, share_info->gpu_temp), share_info->gpu_temp2);
     int duty = share_info->cpu_fan_duty;
-	//printf("temp: %d\n", temp);
+	//printf("max temp: %d\n", temp);
     const double EULER = 2.71828182845904523536;
     double x50L = 50.0;
     double x50U = 60.0;
@@ -530,8 +526,8 @@ static int ec_auto_duty_adjust(void) {
     double power = pow(EULER, pre_prod);
     // printf("power: %lf\n", power);
     double val = 1/(1 + power) * 100;
-    // printf("ret: %lf\n", val);
-    //if(val < 50) val=50;
+    //printf("ret: %lf\n", val);
+    if(val < 40) val=40;
     return val;
 
 }
@@ -539,13 +535,6 @@ static int ec_auto_duty_adjust(void) {
 static int ec_query_cpu_temp(void) {
     return ec_io_read(EC_REG_CPU_TEMP);
 }
-
-int nvml_query_gpu_temp(nvidia_device nvidia_device) {
-    nvmlDeviceGetTemperature(nvidia_device.device, 
-		nvidia_device.sensor, &nvidia_device.gpu_temp);
-    return nvidia_device.gpu_temp;
-}
-
 
 // static int ec_query_gpu_temp(void) {
 //     return ec_io_read(EC_REG_GPU_TEMP);
