@@ -287,57 +287,48 @@ static void main_init_share(void) {
     share_info->manual_next_fan_duty = 0;
     share_info->manual_prev_fan_duty = 0;
 }
-	
-//FILE *fp = NULL;
-/*
-static unsigned char get_gpu_temperature(int *temp1, int *temp2) {
-	char temperature[64];
-	
-	fgets(temperature, sizeof(temperature), fp);
-	*temp1 = atoi(temperature);
-	fgets(temperature, sizeof(temperature), fp);
-	*temp2 = atoi(temperature);
-   
-    return TRUE;
-}*/
 
 static int main_ec_worker(void) {
     setuid(0);
     system("modprobe ec_sys");
     
     nvidia_device *nvidia_devices = NULL;
-	unsigned int nvidia_device_count = 0;
+    unsigned int nvidia_device_count = 0;
 
-	nvidia_devices = init_nvml(nvidia_devices, &nvidia_device_count);
+    nvidia_devices = init_nvml(nvidia_devices, &nvidia_device_count);
 	
-	//fp = popen("/usr/bin/nvidia-smi -l 1 --query-gpu=temperature.gpu --format=csv,noheader", "r");
-	
-	//if (fp == NULL) {
-	//	printf("failed to open pipe\n");
-	//	return FALSE;
-	//}
+	//FILE *io_file = fopen("/sys/kernel/debug/ec/ec0/io", O_RDONLY);
+	/*
+	if (io_file < 0) {
+		printf("unable to read EC from sysfs: %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
+	}*/
 	
     while (share_info->exit == 0) {
+		int sleep_interval = 200;
         // check parent
         if (parent_pid != 0 && kill(parent_pid, 0) == -1) {
             printf("worker on parent death\n");
             break;
         }
-        // write EC
-        int new_fan_duty = share_info->manual_next_fan_duty;
-        if (new_fan_duty != 0
-                && new_fan_duty != share_info->manual_prev_fan_duty) {
-            ec_write_fan_duty(new_fan_duty);
-            share_info->manual_prev_fan_duty = new_fan_duty;
-        }
-        // read EC
-        int io_fd = open("/sys/kernel/debug/ec/ec0/io", O_RDONLY, 0);
-        if (io_fd < 0) {
-            printf("unable to read EC from sysfs: %s\n", strerror(errno));
-            exit(EXIT_FAILURE);
-        }
+		// read EC  -- TODO: must be a better way
+		int io_fd = open("/sys/kernel/debug/ec/ec0/io", O_RDONLY, 0);
+		if (io_fd < 0) {
+			printf("unable to read EC from sysfs: %s\n", strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+			// write EC
+		int new_fan_duty = share_info->manual_next_fan_duty;
+		if (new_fan_duty != 0
+				&& new_fan_duty != share_info->manual_prev_fan_duty) {
+			ec_write_fan_duty(new_fan_duty);
+			share_info->manual_prev_fan_duty = new_fan_duty;
+		}
+		
         unsigned char buf[EC_REG_SIZE];
         ssize_t len = read(io_fd, buf, EC_REG_SIZE);
+        //size_t len = fread(buf, sizeof(unsigned char), EC_REG_SIZE, io_file);
+        
         switch (len) {
         case -1:
             printf("unable to read EC from sysfs: %s\n", strerror(errno));
@@ -355,7 +346,6 @@ static int main_ec_worker(void) {
             share_info->fan_2_rpms = calculate_fan_rpms(buf[EC_REG_FAN_2_RPMS_HI],
                     buf[EC_REG_FAN_2_RPMS_LO]);
             
-			//
             //printf("ndevices: %d\n", nvidia_device_count);
             
 			//printf("temp=%d, duty=%d, rpms=%d\n", share_info->cpu_temp,
@@ -365,14 +355,19 @@ static int main_ec_worker(void) {
         default:
             printf("wrong EC size from sysfs: %ld\n", len);
         }
+        
         close(io_fd);
+        
+        int next_duty = 100;
         // auto EC
         if (share_info->auto_duty == 1) {
-            int next_duty = ec_auto_duty_adjust(nvidia_devices);
-            next_duty = !(next_duty>=95) ? ((int)(((float)next_duty / 10.0)) * 10) : 100;            
+            next_duty = ec_auto_duty_adjust(nvidia_devices);
+            
+            next_duty = (int)(ceil((float)next_duty / 10.0) * 10);      
+                 
             if (next_duty != -1 && next_duty != share_info->auto_duty_val) {
                 char s_time[256];
-                //nvmlDeviceSetFanSpeed_v2(nvidia_devices.device, nvidia_devices.sensor, 100);
+                
                 get_time_string(s_time, 256, "%d/%m %H:%M:%S");
                 printf("%s CPU=%d°C, GPU1=%d°C, GPU2=%d°C auto fan duty to %d%%\n", s_time,
                         share_info->cpu_temp, share_info->gpu_temp, share_info->gpu_temp2, next_duty);
@@ -380,11 +375,12 @@ static int main_ec_worker(void) {
                 share_info->auto_duty_val = next_duty;
             }
         }
-        //
-        usleep(8000 * 1000);
+        
+	   if(share_info->auto_duty_val > next_duty) sleep_interval = 8000; 
+		usleep(sleep_interval * 1000);
     }
     
-	/*pclose(fp);*/	
+    //fclose(io_file);
 	if(nvidia_devices != NULL)
 		free(nvidia_devices);
 	
@@ -419,7 +415,7 @@ static void main_ui_worker(int argc, char** argv) {
             APP_INDICATOR_CATEGORY_HARDWARE);
     g_assert(IS_APP_INDICATOR(indicator));
     app_indicator_set_label(indicator, "Init..", "XX");
-    app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);//APP_INDICATOR_STATUS_ATTENTION
+    app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE); //APP_INDICATOR_STATUS_ATTENTION -- only works in gnome
     app_indicator_set_ordering_index(indicator, -2);
     app_indicator_set_title(indicator, "Clevo");
     app_indicator_set_menu(indicator, GTK_MENU(indicator_menu));
@@ -522,9 +518,8 @@ static void ec_on_sigterm(int signum) {
 }
 
 int ec_auto_duty_adjust(nvidia_device *nvidia_devices) {
-	//get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
-	share_info->gpu_temp = nvml_query_gpu_temp(nvidia_devices[0]);
-	share_info->gpu_temp2 = nvml_query_gpu_temp(nvidia_devices[1]);
+    share_info->gpu_temp = nvml_query_gpu_temp(nvidia_devices[0]);
+    share_info->gpu_temp2 = nvml_query_gpu_temp(nvidia_devices[1]);
 
     int temp = MAX(MAX(share_info->cpu_temp, share_info->gpu_temp), share_info->gpu_temp2);
     int duty = share_info->cpu_fan_duty;
