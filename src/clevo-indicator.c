@@ -131,7 +131,6 @@ static void ui_command_quit(gchar* command);
 static void ui_toggle_menuitems(int fan_duty);
 static void ec_on_sigterm(int signum);
 static int ec_init(void);
-static int ec_auto_duty_adjust(void);
 static int ec_query_cpu_temp(void);
 static int ec_query_gpu_temp(void);
 static int ec_query_fan_duty(const uint32_t reg);
@@ -148,8 +147,6 @@ static int check_proc_instances(const char* proc_name);
 static void get_time_string(char* buffer, size_t max, const char* format);
 static void signal_term(__sighandler_t handler);
 
-static void init_nvml(void);
-
 typedef struct nvidia_device_t {
 	nvmlDevice_t device;
 	nvmlTemperatureSensors_t sensor;// NVML_TEMPERATURE_GPU
@@ -158,10 +155,8 @@ typedef struct nvidia_device_t {
 
 }nvidia_device;
 
-nvidia_device *nvidia_devices;
-unsigned int nvidia_device_count;
-
-FILE *fp = NULL;
+nvidia_device *init_nvml(nvidia_device*, unsigned int *);
+static int ec_auto_duty_adjust(nvidia_device *);
 
 static AppIndicator* indicator = NULL;
 
@@ -213,7 +208,7 @@ static pid_t parent_pid = 0;
 
 int main(int argc, char* argv[]) {
     printf("Simple fan control utility for Clevo laptops\n");
-    init_nvml();
+    //init_nvml();
     if (check_proc_instances(NAME) > 1) {
         printf("Multiple running instances!\n");
         char* display = getenv("DISPLAY");
@@ -292,7 +287,9 @@ static void main_init_share(void) {
     share_info->manual_next_fan_duty = 0;
     share_info->manual_prev_fan_duty = 0;
 }
-
+	
+//FILE *fp = NULL;
+/*
 static unsigned char get_gpu_temperature(int *temp1, int *temp2) {
 	char temperature[64];
 	
@@ -302,18 +299,23 @@ static unsigned char get_gpu_temperature(int *temp1, int *temp2) {
 	*temp2 = atoi(temperature);
    
     return TRUE;
-}
+}*/
 
 static int main_ec_worker(void) {
     setuid(0);
     system("modprobe ec_sys");
     
-	fp = popen("/usr/bin/nvidia-smi -l 1 --query-gpu=temperature.gpu --format=csv,noheader", "r");
+    nvidia_device *nvidia_devices = NULL;
+	unsigned int nvidia_device_count = 0;
+
+	nvidia_devices = init_nvml(nvidia_devices, &nvidia_device_count);
 	
-	if (fp == NULL) {
-		printf("failed to open pipe\n");
-		return FALSE;
-	}
+	//fp = popen("/usr/bin/nvidia-smi -l 1 --query-gpu=temperature.gpu --format=csv,noheader", "r");
+	
+	//if (fp == NULL) {
+	//	printf("failed to open pipe\n");
+	//	return FALSE;
+	//}
 	
     while (share_info->exit == 0) {
         // check parent
@@ -342,17 +344,23 @@ static int main_ec_worker(void) {
             break;
         case 0x100:
             share_info->cpu_temp = buf[EC_REG_CPU_TEMP];
-            get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
+            share_info->gpu_temp = nvml_query_gpu_temp(nvidia_devices[0]);
+            share_info->gpu_temp2 = nvml_query_gpu_temp(nvidia_devices[1]);
+            //get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
+            //printf("GPU1=%d, GPU2=%d\n", nvml_query_gpu_temp(nvidia_devices[0]), nvml_query_gpu_temp(nvidia_devices[1]));
             share_info->cpu_fan_duty = calculate_fan_duty(buf[EC_REG_CPU_FAN_DUTY]);
             share_info->gpu_fan_duty = calculate_fan_duty(buf[EC_REG_GPU_FAN_DUTY]);
             share_info->fan_1_rpms = calculate_fan_rpms(buf[EC_REG_FAN_1_RPMS_HI],
                     buf[EC_REG_FAN_1_RPMS_LO]);
             share_info->fan_2_rpms = calculate_fan_rpms(buf[EC_REG_FAN_2_RPMS_HI],
                     buf[EC_REG_FAN_2_RPMS_LO]);
-            /*
-             printf("temp=%d, duty=%d, rpms=%d\n", share_info->cpu_temp,
-             share_info->fan_duty, share_info->fan_rpms);
-             */
+            
+			//
+            //printf("ndevices: %d\n", nvidia_device_count);
+            
+			//printf("temp=%d, duty=%d, rpms=%d\n", share_info->cpu_temp,
+			//share_info->fan_duty, share_info->fan_rpms);
+             
             break;
         default:
             printf("wrong EC size from sysfs: %ld\n", len);
@@ -360,10 +368,11 @@ static int main_ec_worker(void) {
         close(io_fd);
         // auto EC
         if (share_info->auto_duty == 1) {
-            int next_duty = ec_auto_duty_adjust();
-            next_duty = !(next_duty>=95) ? ((int)(((float)next_duty /10.0)) * 10) : 100;            
+            int next_duty = ec_auto_duty_adjust(nvidia_devices);
+            next_duty = !(next_duty>=95) ? ((int)(((float)next_duty / 10.0)) * 10) : 100;            
             if (next_duty != -1 && next_duty != share_info->auto_duty_val) {
                 char s_time[256];
+                //nvmlDeviceSetFanSpeed_v2(nvidia_devices.device, nvidia_devices.sensor, 100);
                 get_time_string(s_time, 256, "%d/%m %H:%M:%S");
                 printf("%s CPU=%d°C, GPU1=%d°C, GPU2=%d°C auto fan duty to %d%%\n", s_time,
                         share_info->cpu_temp, share_info->gpu_temp, share_info->gpu_temp2, next_duty);
@@ -372,9 +381,13 @@ static int main_ec_worker(void) {
             }
         }
         //
-        usleep(2000 * 1000);
+        usleep(8000 * 1000);
     }
-	pclose(fp);
+    
+	/*pclose(fp);*/	
+	if(nvidia_devices != NULL)
+		free(nvidia_devices);
+	
     printf("worker quit\n");
     return EXIT_SUCCESS;
 }
@@ -406,7 +419,7 @@ static void main_ui_worker(int argc, char** argv) {
             APP_INDICATOR_CATEGORY_HARDWARE);
     g_assert(IS_APP_INDICATOR(indicator));
     app_indicator_set_label(indicator, "Init..", "XX");
-    app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ATTENTION);
+    app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);//APP_INDICATOR_STATUS_ATTENTION
     app_indicator_set_ordering_index(indicator, -2);
     app_indicator_set_title(indicator, "Clevo");
     app_indicator_set_menu(indicator, GTK_MENU(indicator_menu));
@@ -508,8 +521,10 @@ static void ec_on_sigterm(int signum) {
         share_info->exit = 1;
 }
 
-static int ec_auto_duty_adjust(void) {
-	get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
+int ec_auto_duty_adjust(nvidia_device *nvidia_devices) {
+	//get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
+	share_info->gpu_temp = nvml_query_gpu_temp(nvidia_devices[0]);
+	share_info->gpu_temp2 = nvml_query_gpu_temp(nvidia_devices[1]);
 
     int temp = MAX(MAX(share_info->cpu_temp, share_info->gpu_temp), share_info->gpu_temp2);
     int duty = share_info->cpu_fan_duty;
@@ -534,6 +549,11 @@ static int ec_auto_duty_adjust(void) {
 
 static int ec_query_cpu_temp(void) {
     return ec_io_read(EC_REG_CPU_TEMP);
+}
+
+int nvml_query_gpu_temp(nvidia_device device) {
+    nvmlDeviceGetTemperature(device.device, device.sensor, &device.gpu_temp);
+    return device.gpu_temp;
 }
 
 // static int ec_query_gpu_temp(void) {
@@ -677,7 +697,7 @@ static void signal_term(__sighandler_t handler) {
 }
 
 
-static void init_nvml(void){
+nvidia_device *init_nvml(nvidia_device *nvidia_devices, unsigned int *nvidia_device_count){
     nvmlReturn_t result;
     
     // First initialize NVML library
@@ -691,17 +711,17 @@ static void init_nvml(void){
         return;
     }
 
-    result = nvmlDeviceGetCount(&nvidia_device_count);
+    result = nvmlDeviceGetCount(nvidia_device_count);
     
-	nvidia_devices = (nvidia_device*)malloc(sizeof(nvidia_device) * nvidia_device_count);
+	nvidia_devices = (nvidia_device*)malloc(sizeof(nvidia_device) * *nvidia_device_count);
 
     if (NVML_SUCCESS != result)
     { 
         printf("Failed to query device count: %s\n", nvmlErrorString(result));
         return;
     }
-    printf("Found %u device%s\n\n", nvidia_device_count, nvidia_device_count != 1 ? "s" : "");
-
+    
+    printf("Found %u device%s\n\n", *nvidia_device_count, *nvidia_device_count != 1 ? "s" : "");
     printf("Listing devices:\n");
     
     nvmlPciInfo_t pci;
@@ -711,7 +731,7 @@ static void init_nvml(void){
     // You can also query device handle by other features like:
     // nvmlDeviceGetHandleBySerial
     // nvmlDeviceGetHandleByPciBusId
-    for(int i = 0; i < nvidia_device_count; i++){
+    for(int i = 0; i < *nvidia_device_count; i++){
 		nvidia_devices[i].sensor = NVML_TEMPERATURE_GPU;
 		result = nvmlDeviceGetHandleByIndex(0, &nvidia_devices[i].device);
 		result = nvmlDeviceGetName(nvidia_devices[i].device, nvidia_devices[i].name, NVML_DEVICE_NAME_BUFFER_SIZE);
@@ -720,4 +740,5 @@ static void init_nvml(void){
 		nvmlDeviceGetTemperature(nvidia_devices[i].device, nvidia_devices[i].sensor, &nvidia_devices[i].gpu_temp);
 		printf("TEMP NV: %d\n", nvidia_devices[i].gpu_temp);
 	}
+	return nvidia_devices;
 }
