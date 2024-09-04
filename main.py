@@ -29,9 +29,8 @@ def fan_curve(temp, duty):
 def sigmoid_curve(temp, duty, x50L=50, x50U=60):
     a = (x50L + x50U) / 2
     b = 2 / abs(x50L - x50U)
-    return 1/(1 + math.exp(b * -(temp-a))) * 100 
-    # * min(max((temp/5)*10 - 60, 0), 100)
-
+    return 1/(1 + math.exp(b/2 * -(temp-(a+10)))) * 100  #* min(max((temp/5)*10 - 60, 0), 100)
+    #return 1/(1 + math.exp(b * -(temp-a))) * 100
 curve = []
 sig_curve = []
 old = []

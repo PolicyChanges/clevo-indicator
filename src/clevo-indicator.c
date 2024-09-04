@@ -11,11 +11,12 @@
  ============================================================================
 
  TEST:
- gcc clevo-indicator.c -o clevo-indicator `pkg-config --cflags --libs appindicator3-0.1` -lm
- sudo chown root clevo-indicator
- sudo chmod u+s clevo-indicator
+ gcc clevo-indicator.c -o clevo-indicator `pkg-config --cflags --libs
+ appindicator3-0.1` -lm sudo chown root clevo-indicator sudo chmod u+s
+ clevo-indicator
 
- Run as effective uid = root, but uid = desktop user (in order to use indicator).
+ Run as effective uid = root, but uid = desktop user (in order to use
+ indicator).
 
  ============================================================================
  Auto fan control algorithm:
@@ -45,11 +46,12 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <libayatana-appindicator/app-indicator.h>
 
-#include  "nvml.h"
+#include "nvml.h"
 
 #define NAME "clevo-indicator"
 
@@ -63,10 +65,9 @@
 #define FAN_1 0x01
 #define FAN_2 0x02
 
-
 /* EC registers can be read by EC_SC_READ_CMD or /sys/kernel/debug/ec/ec0/io:
  *
- * 1.   
+ * 1.
  * 2. od -Ax -t x1 /sys/kernel/debug/ec/ec0/io
  */
 
@@ -114,9 +115,7 @@ process.\n\
 DO NOT MANIPULATE OR QUERY EC I/O PORTS WHILE THIS PROGRAM IS RUNNING.\n\
 \n";
 
-typedef enum {
-    NA = 0, AUTO = 1, MANUAL = 2
-} MenuItemType;
+typedef enum { NA = 0, AUTO = 1, MANUAL = 2 } MenuItemType;
 
 static void main_init_share(void);
 static int main_ec_worker(void);
@@ -136,11 +135,11 @@ static int ec_query_gpu_temp(void);
 static int ec_query_fan_duty(const uint32_t reg);
 static int ec_query_fan_rpms(int fan);
 static int ec_write_fan_duty(int duty_percentage);
-static int ec_io_wait(const uint32_t port, const uint32_t flag,
-        const char value);
+static int ec_io_wait(
+    const uint32_t port, const uint32_t flag, const char value);
 static uint8_t ec_io_read(const uint32_t port);
-static int ec_io_do(const uint32_t cmd, const uint32_t port,
-        const uint8_t value);
+static int ec_io_do(
+    const uint32_t cmd, const uint32_t port, const uint8_t value);
 static int calculate_fan_duty(int raw_duty);
 static int calculate_fan_rpms(int raw_rpm_high, int raw_rpm_low);
 static int check_proc_instances(const char* proc_name);
@@ -148,15 +147,15 @@ static void get_time_string(char* buffer, size_t max, const char* format);
 static void signal_term(__sighandler_t handler);
 
 typedef struct nvidia_device_t {
-	nvmlDevice_t device;
-	nvmlTemperatureSensors_t sensor;// NVML_TEMPERATURE_GPU
-	char name[NVML_DEVICE_NAME_BUFFER_SIZE];
-	unsigned int gpu_temp;
+    nvmlDevice_t device;
+    nvmlTemperatureSensors_t sensor; // NVML_TEMPERATURE_GPU
+    char name[NVML_DEVICE_NAME_BUFFER_SIZE];
+    unsigned int gpu_temp;
 
-}nvidia_device;
+} nvidia_device;
 
-nvidia_device *init_nvml(nvidia_device*, unsigned int *);
-static int ec_auto_duty_adjust(nvidia_device *);
+nvidia_device* init_nvml(nvidia_device*, unsigned int*);
+static int ec_auto_duty_adjust(nvidia_device*);
 
 static AppIndicator* indicator = NULL;
 
@@ -169,23 +168,32 @@ struct {
 
 }
 
-static menuitems[] = {
-        { "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
-        { "", NULL, 0L, NA, NULL },
-        { "Set FAN to  0%", G_CALLBACK(ui_command_set_fan), 0, MANUAL, NULL },
-        { "Set FAN to  10%", G_CALLBACK(ui_command_set_fan), 10, MANUAL, NULL },
-        { "Set FAN to  20%", G_CALLBACK(ui_command_set_fan), 20, MANUAL, NULL },
-        { "Set FAN to  30%", G_CALLBACK(ui_command_set_fan), 30, MANUAL, NULL },
-        { "Set FAN to  40%", G_CALLBACK(ui_command_set_fan), 40, MANUAL, NULL },
-        { "Set FAN to  50%", G_CALLBACK(ui_command_set_fan), 50, MANUAL, NULL },
-        { "Set FAN to  60%", G_CALLBACK(ui_command_set_fan), 60, MANUAL, NULL },
-        { "Set FAN to  70%", G_CALLBACK(ui_command_set_fan), 70, MANUAL, NULL },
-        { "Set FAN to  80%", G_CALLBACK(ui_command_set_fan), 80, MANUAL, NULL },
-        { "Set FAN to  90%", G_CALLBACK(ui_command_set_fan), 90, MANUAL, NULL },
-        { "Set FAN to 100%", G_CALLBACK(ui_command_set_fan), 100, MANUAL, NULL },
-        { "", NULL, 0L, NA, NULL },
-        { "Quit", G_CALLBACK(ui_command_quit), 0L, NA, NULL }
-};
+static menuitems[]
+    = { { "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
+          { "", NULL, 0L, NA, NULL },
+          { "Set FAN to  0%", G_CALLBACK(ui_command_set_fan), 0, MANUAL, NULL },
+          { "Set FAN to  10%", G_CALLBACK(ui_command_set_fan), 10, MANUAL,
+              NULL },
+          { "Set FAN to  20%", G_CALLBACK(ui_command_set_fan), 20, MANUAL,
+              NULL },
+          { "Set FAN to  30%", G_CALLBACK(ui_command_set_fan), 30, MANUAL,
+              NULL },
+          { "Set FAN to  40%", G_CALLBACK(ui_command_set_fan), 40, MANUAL,
+              NULL },
+          { "Set FAN to  50%", G_CALLBACK(ui_command_set_fan), 50, MANUAL,
+              NULL },
+          { "Set FAN to  60%", G_CALLBACK(ui_command_set_fan), 60, MANUAL,
+              NULL },
+          { "Set FAN to  70%", G_CALLBACK(ui_command_set_fan), 70, MANUAL,
+              NULL },
+          { "Set FAN to  80%", G_CALLBACK(ui_command_set_fan), 80, MANUAL,
+              NULL },
+          { "Set FAN to  90%", G_CALLBACK(ui_command_set_fan), 90, MANUAL,
+              NULL },
+          { "Set FAN to 100%", G_CALLBACK(ui_command_set_fan), 100, MANUAL,
+              NULL },
+          { "", NULL, 0L, NA, NULL },
+          { "Quit", G_CALLBACK(ui_command_quit), 0L, NA, NULL } };
 
 static int menuitem_count = (sizeof(menuitems) / sizeof(menuitems[0]));
 
@@ -202,13 +210,14 @@ struct {
     volatile int auto_duty_val;
     volatile int manual_next_fan_duty;
     volatile int manual_prev_fan_duty;
-}static *share_info = NULL;
+} static* share_info = NULL;
 
 static pid_t parent_pid = 0;
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[])
+{
     printf("Simple fan control utility for Clevo laptops\n");
-    //init_nvml();
+
     if (check_proc_instances(NAME) > 1) {
         printf("Multiple running instances!\n");
         char* display = getenv("DISPLAY");
@@ -218,8 +227,8 @@ int main(int argc, char* argv[]) {
             //
             gtk_init(&argc, &argv);
             GtkWidget* dialog = gtk_message_dialog_new(NULL, 0,
-                    GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE,
-                    "Multiple running instances of %s!", NAME);
+                GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE,
+                "Multiple running instances of %s!", NAME);
             gtk_dialog_run(GTK_DIALOG(dialog));
             gtk_widget_destroy(dialog);
         }
@@ -244,9 +253,9 @@ int main(int argc, char* argv[]) {
                 signal_term(&ec_on_sigterm);
                 return main_ec_worker();
             } else if (worker_pid > 0) {
-               main_ui_worker(argc, argv);
-               share_info->exit = 1;
-               waitpid(worker_pid, NULL, 0);
+                main_ui_worker(argc, argv);
+                share_info->exit = 1;
+                waitpid(worker_pid, NULL, 0);
             } else {
                 printf("unable to create worker: %s\n", strerror(errno));
                 return EXIT_FAILURE;
@@ -258,21 +267,21 @@ int main(int argc, char* argv[]) {
             return main_dump_fan();
         } else {
             int val = atoi(argv[1]);
-            if (val < 0 || val > 100)
-                    {
+            if (val < 0 || val > 100) {
                 printf("invalid fan duty %d!\n", val);
                 return EXIT_FAILURE;
             }
             return main_test_fan(val);
         }
     }
-    
+
     return EXIT_SUCCESS;
 }
 
-static void main_init_share(void) {
-    void* shm = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED,
-            -1, 0);
+static void main_init_share(void)
+{
+    void* shm = mmap(
+        NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
     share_info = shm;
     share_info->exit = 0;
     share_info->cpu_temp = 0;
@@ -288,47 +297,71 @@ static void main_init_share(void) {
     share_info->manual_prev_fan_duty = 0;
 }
 
-static int main_ec_worker(void) {
+unsigned int ramp_duty(nvidia_device* devices, int next_duty, int previous_duty)
+{
+    clock_t start_ramp_time = clock();
+    clock_t ramp_time_ms = 5000;
+const double EULER = 2.71828182845904523536;
+    clock_t delta;
+
+    while (1) {
+        delta = clock() - start_ramp_time;
+
+        float ramp_duty_percent = (float)delta / (float)ramp_time_ms;
+
+        if (ramp_duty_percent > 1.0)
+            ramp_duty_percent = 1.0;
+
+        int new_duty
+            = previous_duty + (ramp_duty_percent * (next_duty - previous_duty));
+
+         //printf("duty: %d previous: %d rdp: %f delta: %d, new duty: %d ramp func: %f ramp func2: %f\n",
+		//	next_duty, previous_duty, ramp_duty_percent, delta, new_duty, pow(ramp_duty_percent, 2), log(ramp_duty_percent)+1.0);
+        
+        ec_write_fan_duty(new_duty);
+        usleep(50 * 1000);
+        if (delta >= ramp_time_ms)
+            break;
+    }
+    return next_duty;
+}
+
+static int main_ec_worker(void)
+{
     setuid(0);
     system("modprobe ec_sys");
-    
-    nvidia_device *nvidia_devices = NULL;
+
+    nvidia_device* nvidia_devices = NULL;
     unsigned int nvidia_device_count = 0;
 
+    int previous_duty = 0;
+
     nvidia_devices = init_nvml(nvidia_devices, &nvidia_device_count);
-	
-	//FILE *io_file = fopen("/sys/kernel/debug/ec/ec0/io", O_RDONLY);
-	/*
-	if (io_file < 0) {
-		printf("unable to read EC from sysfs: %s\n", strerror(errno));
-		exit(EXIT_FAILURE);
-	}*/
-	
+
     while (share_info->exit == 0) {
-		int sleep_interval = 200;
+        int sleep_interval = 1;
         // check parent
         if (parent_pid != 0 && kill(parent_pid, 0) == -1) {
             printf("worker on parent death\n");
             break;
         }
-		// read EC  -- TODO: must be a better way
-		int io_fd = open("/sys/kernel/debug/ec/ec0/io", O_RDONLY, 0);
-		if (io_fd < 0) {
-			printf("unable to read EC from sysfs: %s\n", strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-			// write EC
-		int new_fan_duty = share_info->manual_next_fan_duty;
-		if (new_fan_duty != 0
-				&& new_fan_duty != share_info->manual_prev_fan_duty) {
-			ec_write_fan_duty(new_fan_duty);
-			share_info->manual_prev_fan_duty = new_fan_duty;
-		}
-		
+
+        int io_fd = open("/sys/kernel/debug/ec/ec0/io", O_RDONLY, 0);
+        if (io_fd < 0) {
+            printf("unable to read EC from sysfs: %s\n", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        // write EC
+        int new_fan_duty = share_info->manual_next_fan_duty;
+        if (new_fan_duty != 0
+            && new_fan_duty != share_info->manual_prev_fan_duty) {
+            ec_write_fan_duty(new_fan_duty);
+            share_info->manual_prev_fan_duty = new_fan_duty;
+        }
+
         unsigned char buf[EC_REG_SIZE];
         ssize_t len = read(io_fd, buf, EC_REG_SIZE);
-        //size_t len = fread(buf, sizeof(unsigned char), EC_REG_SIZE, io_file);
-        
+
         switch (len) {
         case -1:
             printf("unable to read EC from sysfs: %s\n", strerror(errno));
@@ -337,58 +370,57 @@ static int main_ec_worker(void) {
             share_info->cpu_temp = buf[EC_REG_CPU_TEMP];
             share_info->gpu_temp = nvml_query_gpu_temp(nvidia_devices[0]);
             share_info->gpu_temp2 = nvml_query_gpu_temp(nvidia_devices[1]);
-            //get_gpu_temperature(&share_info->gpu_temp, &share_info->gpu_temp2);
-            //printf("GPU1=%d, GPU2=%d\n", nvml_query_gpu_temp(nvidia_devices[0]), nvml_query_gpu_temp(nvidia_devices[1]));
-            share_info->cpu_fan_duty = calculate_fan_duty(buf[EC_REG_CPU_FAN_DUTY]);
-            share_info->gpu_fan_duty = calculate_fan_duty(buf[EC_REG_GPU_FAN_DUTY]);
-            share_info->fan_1_rpms = calculate_fan_rpms(buf[EC_REG_FAN_1_RPMS_HI],
-                    buf[EC_REG_FAN_1_RPMS_LO]);
-            share_info->fan_2_rpms = calculate_fan_rpms(buf[EC_REG_FAN_2_RPMS_HI],
-                    buf[EC_REG_FAN_2_RPMS_LO]);
-            
-            //printf("ndevices: %d\n", nvidia_device_count);
-            
-			//printf("temp=%d, duty=%d, rpms=%d\n", share_info->cpu_temp,
-			//share_info->fan_duty, share_info->fan_rpms);
-             
+            // get_gpu_temperature(&share_info->gpu_temp,
+            // &share_info->gpu_temp2); printf("GPU1=%d, GPU2=%d\n",
+            // nvml_query_gpu_temp(nvidia_devices[0]),
+            // nvml_query_gpu_temp(nvidia_devices[1]));
+            share_info->cpu_fan_duty
+                = calculate_fan_duty(buf[EC_REG_CPU_FAN_DUTY]);
+            share_info->gpu_fan_duty
+                = calculate_fan_duty(buf[EC_REG_GPU_FAN_DUTY]);
+            share_info->fan_1_rpms = calculate_fan_rpms(
+                buf[EC_REG_FAN_1_RPMS_HI], buf[EC_REG_FAN_1_RPMS_LO]);
+            share_info->fan_2_rpms = calculate_fan_rpms(
+                buf[EC_REG_FAN_2_RPMS_HI], buf[EC_REG_FAN_2_RPMS_LO]);
+
             break;
         default:
             printf("wrong EC size from sysfs: %ld\n", len);
         }
-        
+
         close(io_fd);
-        
+
         int next_duty = 100;
         // auto EC
         if (share_info->auto_duty == 1) {
             next_duty = ec_auto_duty_adjust(nvidia_devices);
-            
-            next_duty = (int)(ceil((float)next_duty / 10.0) * 10);      
-                 
             if (next_duty != -1 && next_duty != share_info->auto_duty_val) {
                 char s_time[256];
-                
+
                 get_time_string(s_time, 256, "%d/%m %H:%M:%S");
-                printf("%s CPU=%d°C, GPU1=%d°C, GPU2=%d°C auto fan duty to %d%%\n", s_time,
-                        share_info->cpu_temp, share_info->gpu_temp, share_info->gpu_temp2, next_duty);
-                ec_write_fan_duty(next_duty);
-                share_info->auto_duty_val = next_duty;
+                printf(
+                    "%s CPU=%d°C, GPU1=%d°C, GPU2=%d°C auto fan duty to %d%%\n",
+                    s_time, share_info->cpu_temp, share_info->gpu_temp,
+                    share_info->gpu_temp2, next_duty);
+                share_info->auto_duty_val = previous_duty
+                    = ramp_duty(nvidia_devices, next_duty, previous_duty);
+                // ec_write_fan_duty(next_duty);
+                // share_info->auto_duty_val = next_duty;
             }
         }
-        
-	   if(share_info->auto_duty_val > next_duty) sleep_interval = 8000; 
-		usleep(sleep_interval * 1000);
+
+        usleep(2000 * 1000);
     }
-    
-    //fclose(io_file);
-	if(nvidia_devices != NULL)
-		free(nvidia_devices);
-	
+
+    if (nvidia_devices != NULL)
+        free(nvidia_devices);
+
     printf("worker quit\n");
     return EXIT_SUCCESS;
 }
 
-static void main_ui_worker(int argc, char** argv) {
+static void main_ui_worker(int argc, char** argv)
+{
     printf("Indicator...\n");
     int desktop_uid = getuid();
     setuid(desktop_uid);
@@ -403,52 +435,57 @@ static void main_ui_worker(int argc, char** argv) {
         } else {
             item = gtk_menu_item_new_with_label(menuitems[i].label);
             g_signal_connect_swapped(item, "activate",
-                    G_CALLBACK(menuitems[i].callback),
-                    (void* ) menuitems[i].option);
+                G_CALLBACK(menuitems[i].callback), (void*)menuitems[i].option);
         }
         gtk_menu_shell_append(GTK_MENU_SHELL(indicator_menu), item);
         menuitems[i].widget = item;
     }
     gtk_widget_show_all(indicator_menu);
     //
-    indicator = app_indicator_new(NAME, "brasero",
-            APP_INDICATOR_CATEGORY_HARDWARE);
+    indicator
+        = app_indicator_new(NAME, "brasero", APP_INDICATOR_CATEGORY_HARDWARE);
     g_assert(IS_APP_INDICATOR(indicator));
     app_indicator_set_label(indicator, "Init..", "XX");
-    app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE); //APP_INDICATOR_STATUS_ATTENTION -- only works in gnome
+    app_indicator_set_status(indicator,
+        APP_INDICATOR_STATUS_ACTIVE); // APP_INDICATOR_STATUS_ATTENTION
+                                      // -- only works in gnome
     app_indicator_set_ordering_index(indicator, -2);
     app_indicator_set_title(indicator, "Clevo");
     app_indicator_set_menu(indicator, GTK_MENU(indicator_menu));
-    g_timeout_add(1000, &ui_update, NULL);
+    g_timeout_add(3000, &ui_update, NULL);
     ui_toggle_menuitems(share_info->cpu_fan_duty);
     gtk_main();
     printf("main on UI quit\n");
 }
 
-static void main_on_sigchld(int signum) {
+static void main_on_sigchld(int signum)
+{
     printf("main on worker quit signal\n");
     exit(EXIT_SUCCESS);
 }
 
-static void main_on_sigterm(int signum) {
+static void main_on_sigterm(int signum)
+{
     printf("main on signal: %s\n", strsignal(signum));
     if (share_info != NULL)
         share_info->exit = 1;
     exit(EXIT_SUCCESS);
 }
 
-static int main_dump_fan(void) {
+static int main_dump_fan(void)
+{
     printf("Dump fan information\n");
     printf("  CPU FAN Duty: %d%%\n", ec_query_fan_duty(EC_REG_CPU_FAN_DUTY));
     printf("  GPU FAN Duty: %d%%\n", ec_query_fan_duty(EC_REG_GPU_FAN_DUTY));
     printf("  CPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(1));
     printf("  GPU FAN RPMs: %d RPM\n", ec_query_fan_rpms(2));
     printf("  CPU Temp: %d°C\n", ec_query_cpu_temp());
-    //printf("  GPU 1 %d Temp: %d°C\n", i+1, nvml_query_gpu_temp(i));
+    // printf("  GPU 1 %d Temp: %d°C\n", i+1, nvml_query_gpu_temp(i));
     return EXIT_SUCCESS;
 }
 
-static int main_test_fan(int duty_percentage) {
+static int main_test_fan(int duty_percentage)
+{
     printf("Change fan duty to %d%%\n", duty_percentage);
     ec_write_fan_duty(duty_percentage);
     printf("\n");
@@ -456,20 +493,23 @@ static int main_test_fan(int duty_percentage) {
     return EXIT_SUCCESS;
 }
 
-static gboolean ui_update(gpointer user_data) {
+static gboolean ui_update(gpointer user_data)
+{
     char label[256];
-    sprintf(label, "CPU: %d℃ GPU: %d℃", share_info->cpu_temp, share_info->gpu_temp);
+    sprintf(
+        label, "CPU: %d℃ GPU: %d℃", share_info->cpu_temp, share_info->gpu_temp);
     app_indicator_set_label(indicator, label, "XXXXXX");
     char icon_name[256];
-    double load = ((double) share_info->fan_1_rpms) / MAX_FAN_RPM * 100.0;
+    double load = ((double)share_info->fan_1_rpms) / MAX_FAN_RPM * 100.0;
     double load_r = round(load / 5.0) * 5.0;
-    sprintf(icon_name, "brasero-disc-%02d", (int) load_r);
+    sprintf(icon_name, "brasero-disc-%02d", (int)load_r);
     app_indicator_set_icon(indicator, icon_name);
     return G_SOURCE_CONTINUE;
 }
 
-static void ui_command_set_fan(long fan_duty) {
-    int fan_duty_val = (int) fan_duty;
+static void ui_command_set_fan(long fan_duty)
+{
+    int fan_duty_val = (int)fan_duty;
     if (fan_duty_val == 0) {
         printf("clicked on fan duty auto\n");
         share_info->auto_duty = 1;
@@ -484,26 +524,29 @@ static void ui_command_set_fan(long fan_duty) {
     ui_toggle_menuitems(fan_duty_val);
 }
 
-static void ui_command_quit(gchar* command) {
+static void ui_command_quit(gchar* command)
+{
     printf("clicked on quit\n");
     gtk_main_quit();
 }
 
-static void ui_toggle_menuitems(int fan_duty) {
+static void ui_toggle_menuitems(int fan_duty)
+{
     for (int i = 0; i < menuitem_count; i++) {
         if (menuitems[i].widget == NULL)
             continue;
         if (fan_duty == 0)
-            gtk_widget_set_sensitive(menuitems[i].widget,
-                    menuitems[i].type != AUTO);
+            gtk_widget_set_sensitive(
+                menuitems[i].widget, menuitems[i].type != AUTO);
         else
             gtk_widget_set_sensitive(menuitems[i].widget,
-                    menuitems[i].type != MANUAL
-                            || (int) menuitems[i].option != fan_duty);
+                menuitems[i].type != MANUAL
+                    || (int)menuitems[i].option != fan_duty);
     }
 }
 
-static int ec_init(void) {
+static int ec_init(void)
+{
     if (ioperm(EC_DATA, 1, 1) != 0)
         return EXIT_FAILURE;
     if (ioperm(EC_SC, 1, 1) != 0)
@@ -511,19 +554,22 @@ static int ec_init(void) {
     return EXIT_SUCCESS;
 }
 
-static void ec_on_sigterm(int signum) {
+static void ec_on_sigterm(int signum)
+{
     printf("ec on signal: %s\n", strsignal(signum));
     if (share_info != NULL)
         share_info->exit = 1;
 }
 
-int ec_auto_duty_adjust(nvidia_device *nvidia_devices) {
+int ec_auto_duty_adjust(nvidia_device* nvidia_devices)
+{
     share_info->gpu_temp = nvml_query_gpu_temp(nvidia_devices[0]);
     share_info->gpu_temp2 = nvml_query_gpu_temp(nvidia_devices[1]);
 
-    int temp = MAX(MAX(share_info->cpu_temp, share_info->gpu_temp), share_info->gpu_temp2);
+    int temp = MAX(
+        MAX(share_info->cpu_temp, share_info->gpu_temp), share_info->gpu_temp2);
     int duty = share_info->cpu_fan_duty;
-	//printf("max temp: %d\n", temp);
+    // printf("max temp: %d\n", temp);
     const double EULER = 2.71828182845904523536;
     double x50L = 50.0;
     double x50U = 60.0;
@@ -531,22 +577,22 @@ int ec_auto_duty_adjust(nvidia_device *nvidia_devices) {
     double b = 2.0 / abs(x50L - x50U);
     // printf("b: %lf\n", b);
     // printf("temp: %d\n", temp);
-    double pre_prod = (b * -(temp-a));
+    double pre_prod = (b * -(temp - a));
     // printf("pre_prod: %lf\n", pre_prod);
     double power = pow(EULER, pre_prod);
     // printf("power: %lf\n", power);
-    double val = 1/(1 + power) * 100;
-    //printf("ret: %lf\n", val);
-    if(val < 40) val=40;
+    double val = 1 / (1 + power) * 100;
+    // printf("ret: %lf\n", val);
+    if (val < 40)
+        val = 40;
+    // if(val>60) val=60;
     return val;
-
 }
 
-static int ec_query_cpu_temp(void) {
-    return ec_io_read(EC_REG_CPU_TEMP);
-}
+static int ec_query_cpu_temp(void) { return ec_io_read(EC_REG_CPU_TEMP); }
 
-int nvml_query_gpu_temp(nvidia_device device) {
+int nvml_query_gpu_temp(nvidia_device device)
+{
     nvmlDeviceGetTemperature(device.device, device.sensor, &device.gpu_temp);
     return device.gpu_temp;
 }
@@ -555,37 +601,40 @@ int nvml_query_gpu_temp(nvidia_device device) {
 //     return ec_io_read(EC_REG_GPU_TEMP);
 // }
 
-static int ec_query_fan_duty(const uint32_t reg) {
+static int ec_query_fan_duty(const uint32_t reg)
+{
     int raw_duty = ec_io_read(reg);
     return calculate_fan_duty(raw_duty);
 }
 
-static int ec_query_fan_rpms(int fan) {
-    if(fan == 1){
+static int ec_query_fan_rpms(int fan)
+{
+    if (fan == 1) {
         int raw_rpm_hi = ec_io_read(EC_REG_FAN_1_RPMS_HI);
         int raw_rpm_lo = ec_io_read(EC_REG_FAN_1_RPMS_LO);
         return calculate_fan_rpms(raw_rpm_hi, raw_rpm_lo);
-    }
-    else{
+    } else {
         int raw_rpm_hi = ec_io_read(EC_REG_FAN_2_RPMS_HI);
         int raw_rpm_lo = ec_io_read(EC_REG_FAN_2_RPMS_LO);
         return calculate_fan_rpms(raw_rpm_hi, raw_rpm_lo);
     }
 }
 
-static int ec_write_fan_duty(int duty_percentage) {
+static int ec_write_fan_duty(int duty_percentage)
+{
     if (duty_percentage < 0 || duty_percentage > 100) {
         printf("Wrong fan duty to write: %d\n", duty_percentage);
         return EXIT_FAILURE;
     }
-    double v_d = ((double) duty_percentage) / 100.0 * 255.0;
-    int v_i = (int) v_d;
+    double v_d = ((double)duty_percentage) / 100.0 * 255.0;
+    int v_i = (int)v_d;
     ec_io_do(0x99, FAN_2, v_i);
     return ec_io_do(0x99, FAN_1, v_i);
 }
 
-static int ec_io_wait(const uint32_t port, const uint32_t flag,
-        const char value) {
+static int ec_io_wait(
+    const uint32_t port, const uint32_t flag, const char value)
+{
     uint8_t data = inb(port);
     int i = 0;
     while ((((data >> flag) & 0x1) != value) && (i++ < 100)) {
@@ -594,28 +643,30 @@ static int ec_io_wait(const uint32_t port, const uint32_t flag,
     }
     if (i >= 100) {
         printf("wait_ec error on port 0x%x, data=0x%x, flag=0x%x, value=0x%x\n",
-                port, data, flag, value);
+            port, data, flag, value);
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
 }
 
-static uint8_t ec_io_read(const uint32_t port) {
+static uint8_t ec_io_read(const uint32_t port)
+{
     ec_io_wait(EC_SC, IBF, 0);
     outb(EC_SC_READ_CMD, EC_SC);
 
     ec_io_wait(EC_SC, IBF, 0);
     outb(port, EC_DATA);
 
-    //wait_ec(EC_SC, EC_SC_IBF_FREE);
+    // wait_ec(EC_SC, EC_SC_IBF_FREE);
     ec_io_wait(EC_SC, OBF, 1);
     uint8_t value = inb(EC_DATA);
 
     return value;
 }
 
-static int ec_io_do(const uint32_t cmd, const uint32_t port,
-        const uint8_t value) {
+static int ec_io_do(
+    const uint32_t cmd, const uint32_t port, const uint8_t value)
+{
     ec_io_wait(EC_SC, IBF, 0);
     outb(cmd, EC_SC);
 
@@ -628,16 +679,19 @@ static int ec_io_do(const uint32_t cmd, const uint32_t port,
     return ec_io_wait(EC_SC, IBF, 0);
 }
 
-static int calculate_fan_duty(int raw_duty) {
-    return (int) ((double) raw_duty / 255.0 * 100.0);
+static int calculate_fan_duty(int raw_duty)
+{
+    return (int)((double)raw_duty / 255.0 * 100.0);
 }
 
-static int calculate_fan_rpms(int raw_rpm_high, int raw_rpm_low) {
+static int calculate_fan_rpms(int raw_rpm_high, int raw_rpm_low)
+{
     int raw_rpm = (raw_rpm_high << 8) + raw_rpm_low;
     return raw_rpm > 0 ? (2156220 / raw_rpm) : 0;
 }
 
-static int check_proc_instances(const char* proc_name) {
+static int check_proc_instances(const char* proc_name)
+{
     int proc_name_len = strlen(proc_name);
     pid_t this_pid = getpid();
     DIR* dir;
@@ -660,7 +714,7 @@ static int check_proc_instances(const char* proc_name) {
         if (fp) {
             if (fgets(buf, sizeof(buf), fp) != NULL) {
                 if ((buf[proc_name_len] == '\n' || buf[proc_name_len] == '\0')
-                        && strncmp(buf, proc_name, proc_name_len) == 0) {
+                    && strncmp(buf, proc_name, proc_name_len) == 0) {
                     fprintf(stderr, "Process: %ld\n", lpid);
                     instance_count += 1;
                 }
@@ -672,7 +726,8 @@ static int check_proc_instances(const char* proc_name) {
     return instance_count;
 }
 
-static void get_time_string(char* buffer, size_t max, const char* format) {
+static void get_time_string(char* buffer, size_t max, const char* format)
+{
     time_t timer;
     struct tm tm_info;
     time(&timer);
@@ -680,7 +735,8 @@ static void get_time_string(char* buffer, size_t max, const char* format) {
     strftime(buffer, max, format, &tm_info);
 }
 
-static void signal_term(__sighandler_t handler) {
+static void signal_term(__sighandler_t handler)
+{
     signal(SIGHUP, handler);
     signal(SIGINT, handler);
     signal(SIGQUIT, handler);
@@ -691,14 +747,14 @@ static void signal_term(__sighandler_t handler) {
     signal(SIGUSR2, handler);
 }
 
-
-nvidia_device *init_nvml(nvidia_device *nvidia_devices, unsigned int *nvidia_device_count){
+nvidia_device* init_nvml(
+    nvidia_device* nvidia_devices, unsigned int* nvidia_device_count)
+{
     nvmlReturn_t result;
-    
+
     // First initialize NVML library
     result = nvmlInit();
-    if (NVML_SUCCESS != result)
-    { 
+    if (NVML_SUCCESS != result) {
         printf("Failed to initialize NVML: %s\n", nvmlErrorString(result));
 
         printf("Press ENTER to continue...\n");
@@ -707,18 +763,19 @@ nvidia_device *init_nvml(nvidia_device *nvidia_devices, unsigned int *nvidia_dev
     }
 
     result = nvmlDeviceGetCount(nvidia_device_count);
-    
-	nvidia_devices = (nvidia_device*)malloc(sizeof(nvidia_device) * *nvidia_device_count);
 
-    if (NVML_SUCCESS != result)
-    { 
+    nvidia_devices
+        = (nvidia_device*)malloc(sizeof(nvidia_device) * *nvidia_device_count);
+
+    if (NVML_SUCCESS != result) {
         printf("Failed to query device count: %s\n", nvmlErrorString(result));
         return;
     }
-    
-    printf("Found %u device%s\n\n", *nvidia_device_count, *nvidia_device_count != 1 ? "s" : "");
+
+    printf("Found %u device%s\n\n", *nvidia_device_count,
+        *nvidia_device_count != 1 ? "s" : "");
     printf("Listing devices:\n");
-    
+
     nvmlPciInfo_t pci;
     // nvmlComputeMode_t compute_mode;
 
@@ -726,14 +783,16 @@ nvidia_device *init_nvml(nvidia_device *nvidia_devices, unsigned int *nvidia_dev
     // You can also query device handle by other features like:
     // nvmlDeviceGetHandleBySerial
     // nvmlDeviceGetHandleByPciBusId
-    for(int i = 0; i < *nvidia_device_count; i++){
-		nvidia_devices[i].sensor = NVML_TEMPERATURE_GPU;
-		result = nvmlDeviceGetHandleByIndex(0, &nvidia_devices[i].device);
-		result = nvmlDeviceGetName(nvidia_devices[i].device, nvidia_devices[i].name, NVML_DEVICE_NAME_BUFFER_SIZE);
-		result = nvmlDeviceGetPciInfo(nvidia_devices[i].device, &pci);
-		printf("%u. %s [%s]\n", 0, nvidia_devices[i].name, pci.busId);
-		nvmlDeviceGetTemperature(nvidia_devices[i].device, nvidia_devices[i].sensor, &nvidia_devices[i].gpu_temp);
-		printf("TEMP NV: %d\n", nvidia_devices[i].gpu_temp);
-	}
-	return nvidia_devices;
+    for (int i = 0; i < *nvidia_device_count; i++) {
+        nvidia_devices[i].sensor = NVML_TEMPERATURE_GPU;
+        result = nvmlDeviceGetHandleByIndex(0, &nvidia_devices[i].device);
+        result = nvmlDeviceGetName(nvidia_devices[i].device,
+            nvidia_devices[i].name, NVML_DEVICE_NAME_BUFFER_SIZE);
+        result = nvmlDeviceGetPciInfo(nvidia_devices[i].device, &pci);
+        printf("%u. %s [%s]\n", 0, nvidia_devices[i].name, pci.busId);
+        nvmlDeviceGetTemperature(nvidia_devices[i].device,
+            nvidia_devices[i].sensor, &nvidia_devices[i].gpu_temp);
+        printf("TEMP NV: %d\n", nvidia_devices[i].gpu_temp);
+    }
+    return nvidia_devices;
 }
