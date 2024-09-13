@@ -131,7 +131,7 @@ static void ui_toggle_menuitems(int fan_duty);
 static void ec_on_sigterm(int signum);
 static int ec_init(void);
 static int ec_query_cpu_temp(void);
-static int ec_query_gpu_temp(void);
+// static int ec_query_gpu_temp(void);
 static int ec_query_fan_duty(const uint32_t reg);
 static int ec_query_fan_rpms(int fan);
 static int ec_write_fan_duty(int duty_percentage);
@@ -169,7 +169,10 @@ struct {
 }
 
 static menuitems[]
-    = { { "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
+    = { 
+		{ "Enable Aggressive Fan", G_CALLBACK(ui_command_set_fan), -2, MANUAL, NULL },
+		{ "", NULL, 0L, NA, NULL },
+		{ "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
           { "", NULL, 0L, NA, NULL },
           { "Set FAN to  0%", G_CALLBACK(ui_command_set_fan), 0, MANUAL, NULL },
           { "Set FAN to  10%", G_CALLBACK(ui_command_set_fan), 10, MANUAL,
@@ -210,6 +213,8 @@ struct {
     volatile int auto_duty_val;
     volatile int manual_next_fan_duty;
     volatile int manual_prev_fan_duty;
+    volatile int gtk_duty;
+    volatile int aggressive_fan_curve;
 } static* share_info = NULL;
 
 static pid_t parent_pid = 0;
@@ -295,15 +300,46 @@ static void main_init_share(void)
     share_info->auto_duty_val = -1;
     share_info->manual_next_fan_duty = 0;
     share_info->manual_prev_fan_duty = 0;
+    share_info->gtk_duty = 0;
+    share_info->aggressive_fan_curve = 0;
 }
 
-unsigned int ramp_duty(nvidia_device* devices, int next_duty, int previous_duty)
+int get_current_cpu_temp_from_ec()
 {
-    clock_t start_ramp_time = clock();
+	    int io_fd = open("/sys/kernel/debug/ec/ec0/io", O_RDONLY, 0);
+        if (io_fd < 0) {
+            printf("unable to read EC from sysfs: %s\n", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+		int current_cpu_temp;
+        unsigned char buf[EC_REG_SIZE];
+        ssize_t len = read(io_fd, buf, EC_REG_SIZE);
+
+        switch (len) {
+        case -1:
+            printf("unable to read EC from sysfs: %s\n", strerror(errno));
+            break;
+        case 0x100:
+			current_cpu_temp = buf[EC_REG_CPU_TEMP];
+            break;
+        default:
+            printf("wrong EC size from sysfs: %ld\n", len);
+        }
+
+        close(io_fd);
+        return current_cpu_temp;
+}
+
+
+int ramp_duty(nvidia_device* devices, int next_duty, int previous_duty)
+{
     clock_t ramp_time_ms = 5000;
-const double EULER = 2.71828182845904523536;
     clock_t delta;
 
+	if(get_current_cpu_temp_from_ec() >= 80)
+		ramp_time_ms = 0;
+	
+	const clock_t start_ramp_time = clock();
     while (1) {
         delta = clock() - start_ramp_time;
 
@@ -312,22 +348,40 @@ const double EULER = 2.71828182845904523536;
         if (ramp_duty_percent > 1.0)
             ramp_duty_percent = 1.0;
 
-        int new_duty
-            = previous_duty + (ramp_duty_percent * (next_duty - previous_duty));
-
-         //printf("duty: %d previous: %d rdp: %f delta: %d, new duty: %d ramp func: %f ramp func2: %f\n",
-		//	next_duty, previous_duty, ramp_duty_percent, delta, new_duty, pow(ramp_duty_percent, 2), log(ramp_duty_percent)+1.0);
+        
+        int new_duty = share_info->gtk_duty = previous_duty + (ramp_duty_percent * (next_duty - previous_duty));
+        
+        //printf("duty: %d previous: %d rdp: %f delta: %d, new duty: %d \n", next_duty, previous_duty, ramp_duty_percent, delta, new_duty);
         
         ec_write_fan_duty(new_duty);
-        usleep(50 * 1000);
+        
+        usleep(200 * 1000);
+        
         if (delta >= ramp_time_ms)
             break;
     }
     return next_duty;
 }
 
+/*
+void sleep_interrupt_on_temp_increase(int previous_temp) 
+{
+	const clock_t interrupt_begin_timestamp = clock();
+	const clock_t interrupt_interval = 30000;
+	
+	while(1) {
+		if(get_current_cpu_temp_from_ec()-10 > previous_temp)  // interrupt from temp increase
+			break;
+		if(clock() - interrupt_begin_timestamp > interrupt_interval) // interrupt from time interval
+			break;
+		sleep(1);
+	}
+}
+*/
+
 static int main_ec_worker(void)
 {
+
     setuid(0);
     system("modprobe ec_sys");
 
@@ -335,11 +389,14 @@ static int main_ec_worker(void)
     unsigned int nvidia_device_count = 0;
 
     int previous_duty = 0;
-
+	int previous_temp = 100;
+	
     nvidia_devices = init_nvml(nvidia_devices, &nvidia_device_count);
 
     while (share_info->exit == 0) {
+        
         int sleep_interval = 1;
+        
         // check parent
         if (parent_pid != 0 && kill(parent_pid, 0) == -1) {
             printf("worker on parent death\n");
@@ -367,7 +424,7 @@ static int main_ec_worker(void)
             printf("unable to read EC from sysfs: %s\n", strerror(errno));
             break;
         case 0x100:
-            share_info->cpu_temp = buf[EC_REG_CPU_TEMP];
+            previous_temp = share_info->cpu_temp = buf[EC_REG_CPU_TEMP];
             share_info->gpu_temp = nvml_query_gpu_temp(nvidia_devices[0]);
             share_info->gpu_temp2 = nvml_query_gpu_temp(nvidia_devices[1]);
             // get_gpu_temperature(&share_info->gpu_temp,
@@ -393,7 +450,9 @@ static int main_ec_worker(void)
         int next_duty = 100;
         // auto EC
         if (share_info->auto_duty == 1) {
-            next_duty = ec_auto_duty_adjust(nvidia_devices);
+
+            next_duty = ec_auto_duty_adjust(nvidia_devices);   
+
             if (next_duty != -1 && next_duty != share_info->auto_duty_val) {
                 char s_time[256];
 
@@ -402,20 +461,20 @@ static int main_ec_worker(void)
                     "%s CPU=%d°C, GPU1=%d°C, GPU2=%d°C auto fan duty to %d%%\n",
                     s_time, share_info->cpu_temp, share_info->gpu_temp,
                     share_info->gpu_temp2, next_duty);
-                share_info->auto_duty_val = previous_duty
+                previous_duty
                     = ramp_duty(nvidia_devices, next_duty, previous_duty);
-                // ec_write_fan_duty(next_duty);
-                // share_info->auto_duty_val = next_duty;
             }
         }
 
-        usleep(2000 * 1000);
+		sleep(sleep_interval);  // a nice buffer for thermald to do its thing
+		//sleep_interrupt_on_temp_increase(previous_temp);
     }
 
     if (nvidia_devices != NULL)
         free(nvidia_devices);
 
     printf("worker quit\n");
+    
     return EXIT_SUCCESS;
 }
 
@@ -452,7 +511,7 @@ static void main_ui_worker(int argc, char** argv)
     app_indicator_set_ordering_index(indicator, -2);
     app_indicator_set_title(indicator, "Clevo");
     app_indicator_set_menu(indicator, GTK_MENU(indicator_menu));
-    g_timeout_add(3000, &ui_update, NULL);
+    g_timeout_add(1000, &ui_update, NULL);
     ui_toggle_menuitems(share_info->cpu_fan_duty);
     gtk_main();
     printf("main on UI quit\n");
@@ -500,8 +559,8 @@ static gboolean ui_update(gpointer user_data)
         label, "CPU: %d℃ GPU: %d℃", share_info->cpu_temp, share_info->gpu_temp);
     app_indicator_set_label(indicator, label, "XXXXXX");
     char icon_name[256];
-    double load = ((double)share_info->fan_1_rpms) / MAX_FAN_RPM * 100.0;
-    double load_r = round(load / 5.0) * 5.0;
+    //double load = (((double)share_info->fan_1_rpms) / MAX_FAN_RPM) * 100.0;
+    double load_r = round(share_info->gtk_duty  / 5.0) * 5.0;
     sprintf(icon_name, "brasero-disc-%02d", (int)load_r);
     app_indicator_set_icon(indicator, icon_name);
     return G_SOURCE_CONTINUE;
@@ -510,7 +569,16 @@ static gboolean ui_update(gpointer user_data)
 static void ui_command_set_fan(long fan_duty)
 {
     int fan_duty_val = (int)fan_duty;
-    if (fan_duty_val == 0) {
+	if(fan_duty_val == -2) {
+		if((share_info->aggressive_fan_curve = !share_info->aggressive_fan_curve))
+			gtk_menu_item_set_label(menuitems[0].widget, "Enable Quiet Fan Mode");
+		else
+			gtk_menu_item_set_label(menuitems[0].widget, "Enable Aggressive Fan Mode");
+		share_info->auto_duty = 1;
+        share_info->auto_duty_val = -1;
+		share_info->manual_next_fan_duty = 0;
+	}
+    else if (fan_duty_val == 0) {
         printf("clicked on fan duty auto\n");
         share_info->auto_duty = 1;
         share_info->auto_duty_val = -1;
@@ -535,6 +603,8 @@ static void ui_toggle_menuitems(int fan_duty)
     for (int i = 0; i < menuitem_count; i++) {
         if (menuitems[i].widget == NULL)
             continue;
+        if(fan_duty == -2)
+			continue;
         if (fan_duty == 0)
             gtk_widget_set_sensitive(
                 menuitems[i].widget, menuitems[i].type != AUTO);
@@ -568,24 +638,42 @@ int ec_auto_duty_adjust(nvidia_device* nvidia_devices)
 
     int temp = MAX(
         MAX(share_info->cpu_temp, share_info->gpu_temp), share_info->gpu_temp2);
-    int duty = share_info->cpu_fan_duty;
-    // printf("max temp: %d\n", temp);
-    const double EULER = 2.71828182845904523536;
-    double x50L = 50.0;
-    double x50U = 60.0;
-    double a = (x50L + x50U) / 2;
-    double b = 2.0 / abs(x50L - x50U);
-    // printf("b: %lf\n", b);
-    // printf("temp: %d\n", temp);
-    double pre_prod = (b * -(temp - a));
-    // printf("pre_prod: %lf\n", pre_prod);
-    double power = pow(EULER, pre_prod);
-    // printf("power: %lf\n", power);
-    double val = 1 / (1 + power) * 100;
-    // printf("ret: %lf\n", val);
-    if (val < 40)
+ 
+	double val = 0;
+	
+	if(share_info->aggressive_fan_curve) {
+		//printf("aggressive fan curve\n");
+		const double EULER = 2.71828182845904523536;
+		double x50L = 50.0;
+		double x50U = 60.0;
+		double a = (x50L + x50U) / 2;
+		double b = 2.0 / abs(x50L - x50U);
+		// printf("b: %lf\n", b);
+		// printf("temp: %d\n", temp);
+		double pre_prod = (b * -(temp - a));
+		// printf("pre_prod: %lf\n", pre_prod);
+		double power = pow(EULER, pre_prod);
+		// printf("power: %lf\n", power);
+		val = 1 / (1 + power) * 100;
+		// printf("ret: %lf\n", val);
+   }
+   else{
+#define POW 1.5
+   val = 100*pow((float)temp/100.f,POW);
+   printf("pow: %lf\n", pow((float)temp/100.f,POW));
+      //if(val<0)val =0;if(val>100)val=100;
+  }
+  
+#ifdef DOG_SCARED_OF_LAPTOP_FAN
+   if (temp < 50)
         val = 40;
-    // if(val>60) val=60;
+    else if(temp > 85)
+		val = 80;
+	else if(temp >= 99)
+		val = 100;
+	else val = 60;
+#endif
+
     return val;
 }
 
@@ -759,7 +847,7 @@ nvidia_device* init_nvml(
 
         printf("Press ENTER to continue...\n");
         getchar();
-        return;
+        return NULL;
     }
 
     result = nvmlDeviceGetCount(nvidia_device_count);
@@ -769,7 +857,7 @@ nvidia_device* init_nvml(
 
     if (NVML_SUCCESS != result) {
         printf("Failed to query device count: %s\n", nvmlErrorString(result));
-        return;
+        return NULL;
     }
 
     printf("Found %u device%s\n\n", *nvidia_device_count,

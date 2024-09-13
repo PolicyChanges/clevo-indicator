@@ -1,10 +1,11 @@
 [Unit]
 Description=Clevo Notebook Fan Control and Indicator
-StartLimitIntervalSec=0[Service]
-Type=simple
-Restart=always
-RestartSec=1
-ExecStart=~/dev/clevo-fan-control/clevo-indicator/bin/clevo-indicator
+
+
+[Service]
+ExecStart=/home/architect/dev/clevo-fan-control/clevo-indicator/bin/clevo-indicator
+Type=dbus
 
 [Install]
 WantedBy=multi-user.target
+
