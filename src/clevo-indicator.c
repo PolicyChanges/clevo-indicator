@@ -168,11 +168,14 @@ struct {
 
 }
 
+
 static menuitems[]
     = { 
-		{ "Enable Aggressive Fan", G_CALLBACK(ui_command_set_fan), -2, MANUAL, NULL },
+		{ "Fan Duty: ", G_CALLBACK(ui_command_set_fan), -3, MANUAL, NULL },
 		{ "", NULL, 0L, NA, NULL },
-		{ "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
+		  { "Enable Aggressive Fan Curve", G_CALLBACK(ui_command_set_fan), -2, MANUAL, NULL },
+		  { "", NULL, 0L, NA, NULL },
+		  //{ "Set FAN to AUTO", G_CALLBACK(ui_command_set_fan), 0, AUTO, NULL },
           { "", NULL, 0L, NA, NULL },
           { "Set FAN to  0%", G_CALLBACK(ui_command_set_fan), 0, MANUAL, NULL },
           { "Set FAN to  10%", G_CALLBACK(ui_command_set_fan), 10, MANUAL,
@@ -355,7 +358,7 @@ int ramp_duty(nvidia_device* devices, int next_duty, int previous_duty)
         
         ec_write_fan_duty(new_duty);
         
-        usleep(200 * 1000);
+        usleep(500 * 1000);
         
         if (delta >= ramp_time_ms)
             break;
@@ -378,6 +381,7 @@ void sleep_interrupt_on_temp_increase(int previous_temp)
 	}
 }
 */
+
 
 static int main_ec_worker(void)
 {
@@ -555,41 +559,48 @@ static int main_test_fan(int duty_percentage)
 static gboolean ui_update(gpointer user_data)
 {
     char label[256];
-    sprintf(
-        label, "CPU: %d℃ GPU: %d℃", share_info->cpu_temp, share_info->gpu_temp);
-    app_indicator_set_label(indicator, label, "XXXXXX");
+    //sprintf(
+    //    label, "CPU: %d℃ GPU: %d℃", share_info->cpu_temp, share_info->gpu_temp);
+	sprintf(
+        label, "Fan Duty: %d", share_info->gtk_duty);
+    //app_indicator_set_label(indicator, label, "XXXXXX");
+    gtk_menu_item_set_label(menuitems[0].widget, label);
     char icon_name[256];
     //double load = (((double)share_info->fan_1_rpms) / MAX_FAN_RPM) * 100.0;
     double load_r = round(share_info->gtk_duty  / 5.0) * 5.0;
     sprintf(icon_name, "brasero-disc-%02d", (int)load_r);
     app_indicator_set_icon(indicator, icon_name);
+    
     return G_SOURCE_CONTINUE;
 }
 
 static void ui_command_set_fan(long fan_duty)
 {
     int fan_duty_val = (int)fan_duty;
-	if(fan_duty_val == -2) {
-		if((share_info->aggressive_fan_curve = !share_info->aggressive_fan_curve))
-			gtk_menu_item_set_label(menuitems[0].widget, "Enable Quiet Fan Mode");
-		else
-			gtk_menu_item_set_label(menuitems[0].widget, "Enable Aggressive Fan Mode");
-		share_info->auto_duty = 1;
-        share_info->auto_duty_val = -1;
-		share_info->manual_next_fan_duty = 0;
-	}
-    else if (fan_duty_val == 0) {
-        printf("clicked on fan duty auto\n");
-        share_info->auto_duty = 1;
-        share_info->auto_duty_val = -1;
-        share_info->manual_next_fan_duty = 0;
-    } else {
-        printf("clicked on fan duty: %d\n", fan_duty_val);
-        share_info->auto_duty = 0;
-        share_info->auto_duty_val = -1;
-        share_info->manual_next_fan_duty = fan_duty_val;
-    }
-    ui_toggle_menuitems(fan_duty_val);
+    //if(fan_duty_val == -3)return;
+		if(fan_duty_val == -2) {
+				gtk_menu_item_set_label(menuitems[2].widget, 
+				(share_info->aggressive_fan_curve = !share_info->aggressive_fan_curve) ?
+				"Enable Quiet Fan Mode" : "Enable Aggressive Fan Mode");
+			//else
+				//gtk_menu_item_set_label(menuitems[1].widget, "Enable Aggressive Fan Mode");
+			share_info->auto_duty = 1;
+			share_info->auto_duty_val = -1;
+			share_info->manual_next_fan_duty = 0;
+		}
+		else if (fan_duty_val == 0) {
+			printf("clicked on fan duty auto\n");
+			share_info->auto_duty = 1;
+			share_info->auto_duty_val = -1;
+			share_info->manual_next_fan_duty = 0;
+		} else {
+			printf("clicked on fan duty: %d\n", fan_duty_val);
+			share_info->auto_duty = 0;
+			share_info->auto_duty_val = -1;
+			share_info->manual_next_fan_duty = fan_duty_val;
+		}
+		ui_toggle_menuitems(fan_duty_val);
+
 }
 
 static void ui_command_quit(gchar* command)
@@ -601,17 +612,18 @@ static void ui_command_quit(gchar* command)
 static void ui_toggle_menuitems(int fan_duty)
 {
     for (int i = 0; i < menuitem_count; i++) {
+		if(fan_duty < -1)
+			continue;
         if (menuitems[i].widget == NULL)
             continue;
-        if(fan_duty == -2)
-			continue;
+
         if (fan_duty == 0)
             gtk_widget_set_sensitive(
                 menuitems[i].widget, menuitems[i].type != AUTO);
         else
             gtk_widget_set_sensitive(menuitems[i].widget,
                 menuitems[i].type != MANUAL
-                    || (int)menuitems[i].option != fan_duty);
+                    || (int)menuitems[i].option != ((fan_duty < -1 ? 1 : fan_duty)));
     }
 }
 
