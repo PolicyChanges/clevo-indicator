@@ -1,7 +1,8 @@
 vpath %.c ../src
 
-CC = gcc
-CFLAGS = -c -g -Wall -std=gnu99
+CC = g++
+CFLAGS = -c -g -Wall -std=c++23 
+#-std=gnu99
 LDFLAGS = -g
 
 DSTDIR := /usr/local
@@ -16,8 +17,8 @@ TARGET = bin/clevo-indicator
 
 NVML_LIB := /lib/
 NVML_LIB_L := $(addprefix -L , $(NVML_LIB))
-CFLAGS += `pkg-config --cflags ayatana-appindicator3-0.1`
-LDFLAGS += `pkg-config --libs ayatana-appindicator3-0.1`
+#CFLAGS += `pkg-config --cflags ayatana-appindicator3-0.1`
+#LDFLAGS += `pkg-config --libs ayatana-appindicator3-0.1`
 LDFLAGS += -lnvidia-ml $(NVML_LIB_L)
 all: $(TARGET)
 

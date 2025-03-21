@@ -49,10 +49,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "nvml.h"
 
-#include <string>
-#include <sstream>
+#include "nvml.h"
 
 #define NAME "clevo-indicator"
 
@@ -160,10 +158,10 @@ typedef struct nvidia_device_t {
 
 nvidia_device* init_nvml(nvidia_device*, unsigned int*);
 static int ec_auto_duty_adjust(nvidia_device*);
-int nvml_query_gpu_temp(nvidia_device device);
 
 
-static int menuitems[]
+
+static menuitems[]
     = { 
 		/*{ "Fan Duty: ", G_CALLBACK(ui_command_set_fan), -3, MANUAL, NULL },
 		{ "", NULL, 0L, NA, NULL },
@@ -265,64 +263,17 @@ int main(int argc, char* argv[])
             }
         }
     } else {
-        int ramp_interval = 9000;
-        int duty = 20;
-		bool is_shorthand = false;
-		size_t index = 0;
-		
-		std::string cl_arguments;
-		for(int i=1;i<argc;i++) cl_arguments.append(argv[i]).append(" ");
-		//std::vector<std::string> options = {"--help", "-h", "--interval", "-i", "--set-duty", "-d", "--set-interval", "-v"};
-	 
-		if ( cl_arguments.contains("-h") || cl_arguments.contains("--help")) {
-			printf(help_text);
-			return main_dump_fan();
-		} 
-		if (((index = cl_arguments.find("-i")) != std::string::npos) || ((index = cl_arguments.find("--immediate")) != std::string::npos))
-		{
-			if(argc < 3){printf("not enough arguments\n");exit(EXIT_FAILURE);}
-			std::string option_duty;
-			std::string option_values = cl_arguments.substr(index);
-			std::istringstream option_stream(option_values);
-			std::getline(option_stream, option_duty, ' ');
-			std::getline(option_stream, option_duty, ' ');
-			
-			ramp_interval = 0;
-			duty = atoi(option_duty.c_str());
-			if(duty < 0 || duty > 100) {printf("invalid fan duty %d!\n",duty); return EXIT_FAILURE;}
-			//return printf("return ramp_duty2(%d, %d);", duty, ramp_interval);
-			return ramp_duty2(duty, ramp_interval);
-		}
-
-		if (((index = cl_arguments.find("-g")) != std::string::npos) || ((index = cl_arguments.find("--game")) != std::string::npos))
-		{
-			return ramp_duty2(80, 30000);
-		}
-		if(((index = cl_arguments.find("-v")) != std::string::npos) || ((index = cl_arguments.find("--set-interval")) != std::string::npos)) 
-		{
-			if(argc < 3){printf("not enough arguments\n");exit(EXIT_FAILURE);}
-			std::string option_interval;
-			std::string option_values = cl_arguments.substr(index);
-			std::istringstream option_stream(option_values);
-			std::getline(option_stream, option_interval, ' ');
-			std::getline(option_stream, option_interval, ' ');
-			
-			ramp_interval = atoi(option_interval.c_str());
-		}
-		if(((index = cl_arguments.find("-d")) != std::string::npos) || ((index = cl_arguments.find("--set-duty")) != std::string::npos)) 
-		{
-			if(argc < 3){printf("not enough arguments\n");exit(EXIT_FAILURE);}
-			std::string option_duty;
-			std::string option_values = cl_arguments.substr(index);
-			std::istringstream option_stream(option_values);
-			std::getline(option_stream, option_duty, ' ');
-			std::getline(option_stream, option_duty, ' ');
-			
-			duty = atoi(option_duty.c_str());
-		}
-		
-		printf("return ramp_duty2(%d, %d);", duty, ramp_interval);	
-		return ramp_duty2(val, ramp_interval);//main_test_fan(val);
+        if (argv[1][0] == '-') {
+            printf(help_text);
+            return main_dump_fan();
+        } else {
+            int val = atoi(argv[1]);
+            if (val < 0 || val > 100) {
+                printf("invalid fan duty %d!\n", val);
+                return EXIT_FAILURE;
+            }
+            return ramp_duty2(val,30000);//main_test_fan(val);
+        }
     }
 }
 
@@ -330,7 +281,7 @@ static void main_init_share(void)
 {
     void* shm = mmap(
         NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
-    share_info = NULL;//shm;
+    share_info = shm;
     share_info->exit = 0;
     share_info->cpu_temp = 0;
     share_info->gpu_temp = 0;
@@ -354,7 +305,7 @@ int get_current_cpu_temp_from_ec()
             printf("unable to read EC from sysfs: %s\n", strerror(errno));
             exit(EXIT_FAILURE);
         }
-	int current_cpu_temp;
+		int current_cpu_temp;
         unsigned char buf[EC_REG_SIZE];
         ssize_t len = read(io_fd, buf, EC_REG_SIZE);
 
@@ -388,7 +339,7 @@ int ramp_duty2(int val, int interval)
 		return EXIT_SUCCESS;
 		//ec_query_fan_duty(EC_REG_CPU_FAN_DUTY);;
 	}
-     const clock_t start_ramp_time = clock();
+        const clock_t start_ramp_time = clock();
     while (1) {
         delta = clock() - start_ramp_time;
 
@@ -409,7 +360,7 @@ int ramp_duty2(int val, int interval)
                  delta, new_duty);
 #endif
         ec_write_fan_duty(new_duty);
-        usleep(500 * 1000);
+        usleep(200 * 1000);
 
         if (delta >= ramp_time_ms)
             break;
