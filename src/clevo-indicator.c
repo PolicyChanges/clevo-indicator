@@ -322,7 +322,7 @@ int main(int argc, char* argv[])
 		}
 		
 		printf("return ramp_duty2(%d, %d);", duty, ramp_interval);	
-		return ramp_duty2(val, ramp_interval);//main_test_fan(val);
+		return ramp_duty2(duty, ramp_interval);//main_test_fan(val);
     }
 }
 
