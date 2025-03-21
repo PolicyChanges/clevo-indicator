@@ -296,7 +296,9 @@ int main(int argc, char* argv[])
 
 		if (((index = cl_arguments.find("-g")) != std::string::npos) || ((index = cl_arguments.find("--game")) != std::string::npos))
 		{
-			return ramp_duty2(80, 30000);
+			ramp_duty2(20,0);
+			sleep(2);
+			return ramp_duty2(80, 120000);
 		}
 		if(((index = cl_arguments.find("-v")) != std::string::npos) || ((index = cl_arguments.find("--set-interval")) != std::string::npos)) 
 		{
