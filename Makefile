@@ -1,7 +1,8 @@
 vpath %.c ../src
 
-CC = gcc
-CFLAGS = -c -Wall -std=gnu99
+CC = g++
+CFLAGS = -c -Wall -std=c++20 -fpermissive
+#-std=gnu99
 LDFLAGS =
 
 DSTDIR := /usr/local
@@ -13,8 +14,8 @@ OBJ = $(patsubst %.c,$(OBJDIR)/%.o,$(SRC))
 
 TARGET = bin/clevo-indicator
 
-CFLAGS += `pkg-config --cflags appindicator3-0.1`
-LDFLAGS += `pkg-config --libs appindicator3-0.1`
+CFLAGS += -Ofast `pkg-config --cflags ayatana-appindicator3-0.1`
+LDFLAGS += -L/usr/lib64 -lnvidia-ml `pkg-config --libs ayatana-appindicator3-0.1`
 
 all: $(TARGET)
 
@@ -31,6 +32,9 @@ $(TARGET): $(OBJ) Makefile
 	@mkdir -p bin
 	@echo linking $(TARGET) from $(OBJ)
 	@$(CC) $(OBJ) -o $(TARGET) $(LDFLAGS) -lm
+	@sudo chown root $(TARGET)
+	@sudo chgrp adm  $(TARGET)
+	@sudo chmod 4750 $(TARGET)
 
 clean:
 	rm $(OBJ) $(TARGET)
